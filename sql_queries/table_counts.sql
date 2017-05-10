@@ -1,0 +1,19 @@
+ select 'bill_analysis_tbl', count(*) from bill_analysis_tbl;
+ select 'bill_detail_vote_tbl', count(*) from bill_detail_vote_tbl;
+ select 'bill_history_tbl', count(*) from bill_history_tbl;
+ select 'bill_motion_tbl', count(*) from bill_motion_tbl;
+ select 'bill_summary_vote_tbl', count(*) from bill_summary_vote_tbl;
+ select 'bill_tbl', count(*) from bill_tbl;
+ select 'bill_version_authors_tbl', count(*) from bill_version_authors_tbl;
+ select 'bill_version_tbl', count(*) from bill_version_tbl;
+ select 'codes_tbl', count(*) from codes_tbl;
+ select 'committee_agenda_tbl', count(*) from committee_agenda_tbl;
+ select 'committee_hearing_tbl', count(*) from committee_hearing_tbl;
+ select 'daily_file_tbl', count(*) from daily_file_tbl;
+ select 'law_section_tbl', count(*) from law_section_tbl;
+ select 'law_toc_sections_tbl', count(*) from law_toc_sections_tbl;
+ select 'law_toc_tbl', count(*) from law_toc_tbl;
+ select 'legislator_tbl', count(*) from legislator_tbl;
+ select 'location_code_tbl', count(*) from location_code_tbl;
+ select 'veto_message_tbl', count(*) from veto_message_tbl;
+ 

@@ -1,0 +1,1 @@
+SELECT bill_id, min(action_date) as earliest_action_date FROM capublic.bill_history_tbl where bill_id in (select distinct bill_id from bill_history_tbl where end_status='Enrolled') group by bill_id order by earliest_action_date

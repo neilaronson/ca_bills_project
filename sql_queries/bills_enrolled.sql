@@ -1,0 +1,1 @@
+select distinct bill_id from bill_history_tbl where end_status='Enrolled';
