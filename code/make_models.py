@@ -35,7 +35,6 @@ class Pipeline(object):
         with its best hyperparameters. It also reports on what these hyperparameters were"""
         for model in self.list_of_models:
             model = model()
-            import ipdb; ipdb.set_trace()
             model.fit(x_data, y_data)
             self.trained_models.append(model)
 
@@ -63,9 +62,9 @@ class Pipeline(object):
         return scores
 
 def main():
-    query = """SELECT b.bill_id, session_year, session_num, measure_type, e.urgency, e.earliest_date, b.passed
+    query = """SELECT b.bill_id, session_year, session_num, measure_type, e.urgency, e.earliest_date, e.appropriation, e.vote_required, e.taxlevy, b.passed
     FROM bill_tbl b
-    left join (select earliest.bill_id, earliest.earliest_date, bv.bill_version_id as earliest_bvid, bv.urgency from
+    left join (select earliest.bill_id, earliest.earliest_date, bv.bill_version_id as earliest_bvid, bv.urgency, bv.appropriation, bv.vote_required, bv.taxlevy from
 				(select bill_id, min(bill_version_action_date) as earliest_date from bill_version_tbl
 				group by bill_id) earliest
 				join bill_version_tbl bv on (earliest.bill_id=bv.bill_id and earliest.earliest_date=bv.bill_version_action_date)) e
@@ -75,10 +74,10 @@ def main():
     X_train, y_train = cleaner.clean()
 
     baseline = DummyClassifier
-    gb = GradientBoostingClassifier
     rf = RandomForestClassifier
+    gb = GradientBoostingClassifier
 
-    pipe = Pipeline([baseline, gb, rf])
+    pipe = Pipeline([baseline, rf, gb])
     pipe.fit_predict(X_train, y_train)
     pipe.print_cv_results(X_train, y_train)
 
