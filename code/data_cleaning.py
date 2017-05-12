@@ -16,10 +16,14 @@ class DataCleaning(object):
             if query:
                 self.df = get_sql.get_df(query)
 
-    def dummify(self, columns):
+    def dummify(self, columns, regression=False):
         """Create dummy columns for categorical variables"""
-        dummies = pd.get_dummies(self.df[columns], columns=columns,
-                                prefix=columns)
+        if regression:
+            dummies = pd.get_dummies(self.df[columns], columns=columns,
+                                    prefix=columns, drop_first=True)
+        else:
+            dummies = pd.get_dummies(self.df[columns], columns=columns,
+                                    prefix=columns)
         self.df = self.df.drop(columns, axis=1)
         self.df = pd.concat([self.df,dummies], axis=1)
 
@@ -50,12 +54,15 @@ class DataCleaning(object):
         dummy column and scale numeric columns for regularization"""
         self.drop_na()
         self.make_session_type()
-        self.dummify(['urgency', 'taxlevy', 'appropriation'])
+        if regression:
+            self.dummify(['urgency', 'taxlevy', 'appropriation'], regression=True)
+        else:
+            self.dummify(['urgency', 'taxlevy', 'appropriation'])
         self.bucket_vote_required()
-        todrop = [u'bill_id', u'session_year', u'session_num', u'measure_type',
-       u'earliest_date']
+        todrop = [u'bill_id', u'session_year', u'session_num', u'measure_type', u'fiscal_committee']
         self.drop_some_cols(todrop)
-        import ipdb; ipdb.set_trace()
+
+        #import ipdb; ipdb.set_trace()
         y = self.df.pop('passed').values
         X = self.df.values
 
