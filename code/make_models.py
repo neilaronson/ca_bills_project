@@ -72,10 +72,10 @@ def main():
     on b.bill_id=e.bill_id
     join start_dates sd on b.session_year=sd.session_year
     where b.measure_type in ('AB' , 'SB')"""
-    cleaner = DataCleaning(query)
+    cleaner = DataCleaning()
     X_train, y_train = cleaner.clean()
 
-    reg_cleaner = DataCleaning(query)
+    reg_cleaner = DataCleaning()
     X_train_reg, y_train_reg = reg_cleaner.clean(regression=True)
 
     baseline = DummyClassifier
