@@ -1,4 +1,4 @@
-ALTER TABLE `capublic`.`bill_detail_vote_tbl` 
+ALTER TABLE `capublic`.`bill_detail_vote_tbl`
 ADD COLUMN `SCID` VARCHAR(45) NULL DEFAULT NULL AFTER `speaker`;
 UPDATE bill_detail_vote_tbl SET SCID=(CASE
 	WHEN location_code='AFLOOR' THEN 'A0'
@@ -89,7 +89,7 @@ UPDATE bill_detail_vote_tbl SET SCID=(CASE
 	WHEN location_code='CX37' THEN 'A5'
 	WHEN location_code='CX38' THEN 'A30'
     ELSE NULL END);
-ALTER TABLE `capublic`.`bill_detail_vote_tbl` 
+ALTER TABLE `capublic`.`bill_detail_vote_tbl`
 ADD COLUMN `SCGID` INT NULL DEFAULT NULL AFTER `SCID`;
 UPDATE bill_detail_vote_tbl SET SCGID=(CASE
 	WHEN SCID='S0' OR SCID='A0' THEN 0

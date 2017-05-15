@@ -6,8 +6,8 @@ import numpy as np
 from data_cleaning import DataCleaning
 
 current_time = datetime.now().strftime(format='%m-%d-%y-%H-%M')
-dc = DataCleaning()
-df = dc.df
+# dc = DataCleaning()
+# df = dc.df
 
 def bills_graphs():
     df['vote_required'] = df['vote_required'].apply(lambda vote: 'Majority' if vote=='Majority' else 'More than Majority')
@@ -102,7 +102,34 @@ def plot_parties(df):
         y=1, kind='bar', title='Percent passed by party', legend=False)
     ax.set_xticklabels(ax.xaxis.get_majorticklabels(), rotation=0)
     ax.plot()
-    graph_filename = "../graphs/paty_"+current_time+".png"
+    graph_filename = "../graphs/party_"+current_time+".png"
     plt.savefig(graph_filename)
 
-authors_graphs()
+def bill_version_graphs():
+    query = """select b.bill_id, count(bill_version_id) as n_versions, passed from bill_version_tbl bv
+        join bill_tbl b on b.bill_id=bv.bill_id
+        group by b.bill_id"""
+    df = get_sql.get_df(query)
+    plot_bill_version_hist(df)
+    plot_bill_version_comp(df)
+
+def plot_bill_version_hist(df):
+    bins = np.arange(16, step=1)
+    df.plot(y='n_versions', kind='hist', bins=bins, title='Number of versions for all bills')
+    graph_filename = "../graphs/versions_hist_all"+current_time+".png"
+    plt.savefig(graph_filename)
+
+def plot_bill_version_comp(df):
+    bins = np.arange(16, step=1)
+    ylim = [0, .5]
+    fig, ax_list = plt.subplots(2,1)
+    ax_list[0].hist(df[df.passed==1].dropna()['n_versions'], bins=bins, normed=True)
+    ax_list[0].set_title("Passed")
+    ax_list[0].set_ylim(ylim)
+    ax_list[1].hist(df[df.passed==0].dropna()['n_versions'], bins=bins, normed=True)
+    ax_list[1].set_title("Not passed")
+    ax_list[1].set_ylim(ylim)
+    graph_filename = "../graphs/comp_versions_hist_"+current_time+".png"
+    plt.savefig(graph_filename)
+
+bill_version_graphs()
