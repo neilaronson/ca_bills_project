@@ -32,20 +32,26 @@ class DataCleaning(object):
             where b.measure_type in ('AB' , 'SB')"""
         bills_df = get_sql.get_df(bills_query)
 
-        authors_query = """select bv.bill_id, count(l.author_name) as n_authors from bill_version_authors_tbl bva
+
+        authors_query = """select bv.bill_id, l.author_name, l.party from bill_version_authors_tbl bva
             left join legislator_tbl l on bva.name=l.author_name and l.session_year=bva.session_year
             join bill_version_tbl bv on bv.bill_version_id=bva.bill_version_id
-            where contribution='LEAD_AUTHOR' and bva.bill_version_id like '%INT' and (bv.bill_id like '%AB%' or bv.bill_id like '%SB%')
-            group by bill_id"""
+            where contribution='LEAD_AUTHOR' and bva.bill_version_id like '%INT' and (bv.bill_id like '%AB%' or bv.bill_id like '%SB%')"""
         authors_df = get_sql.get_df(authors_query)
         authors_df = self.aggregate_authors_df(authors_df)
+
         merged_df = pd.merge(bills_df, authors_df, on='bill_id')
+
         return merged_df
 
     def aggregate_authors_df(self, authors_df):
-        #authors_df['n_authors'] = authors_df['n_authors'].apply(lambda n: n if n > 0 else np.nan)
-        authors_df['committee'] = (authors_df['n_authors']==0).astype(int)
-        return authors_df
+        authors_df['party'] = authors_df['party'].fillna('COM')
+        party_df = authors_df[['bill_id', 'party']].groupby('bill_id').agg(agg_parties)
+        cosponsor_count_df = authors_df[['bill_id', 'party']].groupby('bill_id').count()
+        cosponsor_count_df = cosponsor_count_df.rename(columns={'party': 'n_authors'})
+        cosponsor_count_df['committee'] = (cosponsor_count_df['n_authors']==0).astype(int)
+        merged_df = pd.merge(party_df, cosponsor_count_df, left_index=True, right_index=True).reset_index()
+        return merged_df
 
     def dummify(self, columns, regression=False):
         """Create dummy columns for categorical variables"""
@@ -83,19 +89,36 @@ class DataCleaning(object):
     def clean(self, regression=False, predict=False, test=False):
         """Executes all cleaning methods in proper order. If regression, remove one
         dummy column and scale numeric columns for regularization"""
-        #import ipdb; ipdb.set_trace()
+        import ipdb; ipdb.set_trace()
         self.drop_na()
         self.make_session_type()
+        self.df = self.df[['party', 'passed']]
         if regression:
-            self.dummify(['urgency', 'taxlevy', 'appropriation'], regression=True)
+            self.dummify(['party'], regression=True)
         else:
-            self.dummify(['urgency', 'taxlevy', 'appropriation'])
-        self.bucket_vote_required()
-        todrop = [u'bill_id', u'session_year', u'session_num', u'measure_type', u'fiscal_committee', u'earliest_bvid']
-        self.drop_some_cols(todrop)
+            self.dummify(['party'])
+        # if regression:
+        #     self.dummify(['urgency', 'taxlevy', 'appropriation', 'party'], regression=True)
+        # else:
+        #     self.dummify(['urgency', 'taxlevy', 'appropriation', 'party'])
+        # self.bucket_vote_required()
+        #todrop = [u'bill_id', u'session_year', u'session_num', u'measure_type', u'fiscal_committee', u'earliest_bvid']
+        #self.drop_some_cols(todrop)
 
-        #import ipdb; ipdb.set_trace()
+
         y = self.df.pop('passed').values
         X = self.df.values
 
         return X, y
+
+def agg_parties(list_of_parties):
+    """All Dem, Repub, Both, or Committee"""
+    list_of_parties = list_of_parties.tolist()
+    if all(party=="DEM" for party in list_of_parties):
+        return "ALL_DEM"
+    elif all(party=="REP" for party in list_of_parties):
+        return "ALL_REP"
+    elif all(party=="COM" for party in list_of_parties):
+        return "COM"
+    else:
+        return "BOTH"
