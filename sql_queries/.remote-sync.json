@@ -1,0 +1,15 @@
+{
+  "uploadOnSave": true,
+  "useAtomicWrites": true,
+  "deleteLocal": false,
+  "hostname": "35.160.93.20",
+  "target": "/home/ubuntu/ca_bills_project/sql_queries",
+  "ignore": [
+    ".remote-sync.json",
+    ".git/**"
+  ],
+  "username": "ubuntu",
+  "keyfile": "/Users/neilaronson/.ssh/neilkeypair2.pem",
+  "watch": [],
+  "transport": "scp"
+}
