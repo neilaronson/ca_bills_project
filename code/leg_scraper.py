@@ -4,8 +4,10 @@ Convert tables into pandas data frames and then add them to mySQL DB"""
 import requests
 from bs4 import BeautifulSoup
 import pandas as pd
+import get_sql
 
 def pandafy_table(table):
+    """Takes in an HTML table as BeautifulSoup object and outputs a pandas df version of the table"""
     all_rows = table.find_all("tr")[2:-2]
     results = make_tuple_list(all_rows)
     tbl = make_standard_table(results)
@@ -67,12 +69,14 @@ def make_standard_table(list_of_tuples):
 
     return final_results
 
-page = requests.get("https://en.wikipedia.org/wiki/Members_of_the_California_State_Legislature").content
+def main():
+    page = requests.get("https://en.wikipedia.org/wiki/Members_of_the_California_State_Legislature").content
+    soup = BeautifulSoup(page, "html.parser")
+    senate_table = soup.find_all('table')[1]
+    assembly_table = soup.find_all('table')[2]
+    assembly_df = pandafy_table(assembly_table)
+    senate_df = pandafy_table(senate_table)
+    write_to_sql(assembly_df, senate_df)
 
-soup = BeautifulSoup(page, "html.parser")
-
-senate_table = soup.find_all('table')[1]
-assembly_table = soup.find_all('table')[2]
-assembly_df = pandafy_table(assembly_table)
-
-senate_df = pandafy_table(senate_table)
+if __name__ == '__main__':
+    main()

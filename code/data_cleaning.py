@@ -1,8 +1,13 @@
 import pandas as pd
 import get_sql
+import numpy as np
+from bs4 import BeautifulSoup
+from sklearn.feature_extraction.text import TfidfVectorizer
+from textblob import TextBlob
+from sklearn.decomposition import NMF
+import cPickle as pickle
 
-
-class DataCleaning(object):
+class DataPrep(object):
     """An object to clean and wrangle data into format for a model"""
 
     def __init__(self, query=None, filepath=None, training=True, predict=False):
@@ -21,28 +26,43 @@ class DataCleaning(object):
                 self.df = self.default_data()
 
     def default_data(self):
-        bills_query = """SELECT b.bill_id, e.earliest_bvid, b.session_year, b.session_num, measure_type, e.urgency, datediff(e.earliest_date,sd.start_date) as days_since_start, e.appropriation, e.vote_required, e.taxlevy, e.fiscal_committee, b.passed
+        bills_query = """SELECT b.bill_id, bv.bill_version_id, b.session_year, b.session_num, measure_type, bv.urgency, datediff(bv.bill_version_action_date,sd.start_date) as days_since_start, bv.appropriation, bv.vote_required, bv.taxlevy, bv.fiscal_committee, b.passed
             FROM bill_tbl b
-            left join (select earliest.bill_id, earliest.earliest_date, bv.bill_version_id as earliest_bvid, bv.urgency, bv.appropriation, bv.vote_required, bv.taxlevy, bv.fiscal_committee from
-        				(select bill_id, min(bill_version_action_date) as earliest_date from bill_version_tbl
-        				group by bill_id) earliest
-        				join bill_version_tbl bv on (earliest.bill_id=bv.bill_id and earliest.earliest_date=bv.bill_version_action_date)) e
-            on b.bill_id=e.bill_id
+            left join bill_version_tbl bv
+            on b.bill_id=bv.bill_id and bv.bill_version_id like '%INT'
             join start_dates sd on b.session_year=sd.session_year and b.session_num=sd.session_num
-            where b.measure_type in ('AB' , 'SB')"""
+            where b.measure_type in ('AB' , 'SB') and b.session_year < '2015'
+            """
         bills_df = get_sql.get_df(bills_query)
 
 
-        authors_query = """select bv.bill_id, l.author_name, l.party from bill_version_authors_tbl bva
-            left join legislator_tbl l on bva.name=l.author_name and l.session_year=bva.session_year
-            join bill_version_tbl bv on bv.bill_version_id=bva.bill_version_id
-            where contribution='LEAD_AUTHOR' and bva.bill_version_id like '%INT' and (bv.bill_id like '%AB%' or bv.bill_id like '%SB%')"""
+        authors_query = """SELECT
+                bv.bill_id, l.author_name, l.party
+            FROM
+                bill_version_authors_tbl bva
+                    LEFT JOIN
+                legislator_tbl l ON bva.name = l.author_name
+                    AND l.session_year = bva.session_year
+                    JOIN
+                bill_version_tbl bv ON bv.bill_version_id = bva.bill_version_id
+            WHERE
+                contribution = 'LEAD_AUTHOR'
+            		AND bv.bill_id < '2015'
+                    AND bva.bill_version_id LIKE '%INT'
+                    AND (bv.bill_id LIKE '%AB%'
+                    OR bv.bill_id LIKE '%SB%')"""
         authors_df = get_sql.get_df(authors_query)
         authors_df = self.aggregate_authors_df(authors_df)
 
-        merged_df = pd.merge(bills_df, authors_df, on='bill_id')
+        earliest_version_query = """select bv.bill_id, bv.bill_xml from bill_version_tbl bv
+            where bv.bill_version_id like '%INT'
+            """
+        text_df = get_sql.get_df(earliest_version_query)
 
-        return merged_df
+        bill_authors_merged_df = pd.merge(bills_df, authors_df, on='bill_id')
+        bill_authors_text_df = pd.merge(bill_authors_merged_df, text_df, on='bill_id')
+
+        return bill_authors_text_df
 
     def aggregate_authors_df(self, authors_df):
         authors_df['party'] = authors_df['party'].fillna('COM')
@@ -86,25 +106,74 @@ class DataCleaning(object):
         """Uses session_num to make a column indicating if it was regular session (0) or Extraordinary session(1)"""
         self.df['session_type'] = self.df['session_num'].apply(lambda session: 0 if session=='0' else 1)
 
-    def clean(self, regression=False, predict=False, test=False):
+    def get_latent_topic_mat(self, X_data, n_components):
+        tfidf_mat = self.get_tfidf_mat(X_data)
+        print "tfidf complete"
+        nmf_mat = self.get_nmf_mat(tfidf_mat, n_components)
+        print "nmf complete"
+        return nmf_mat
+
+    def get_tfidf_mat(self, X_data):
+        """Apply TFIDF and get back transformed matrix"""
+        tfidf = TfidfVectorizer(tokenizer=tokenize, stop_words='english', max_features=2000)
+        tfidf_mat = tfidf.fit_transform(X_data)
+        return tfidf_mat
+
+    def get_nmf_mat(self, X_data, n_components):
+        nmf = NMF(n_components=n_components)
+        W = nmf.fit_transform(X_data)
+        return W
+
+    def process_text(self, column_name, field):
+        """Run each text row of column_name through BS to extract content from the specified XML field"""
+        bill_soup = self.df[column_name].values
+        bill_content = [self.get_bill_text(soup, field) for soup in bill_soup]
+        return bill_content
+
+    def get_bill_text(self, xml, field):
+        """Finds all tags of field in given xml and returns them as one string
+        separated by space if there's more than one"""
+        soup = BeautifulSoup(xml, "xml")
+        results = [raw.text for raw in soup.find_all(field)]
+        text = " ".join(results)
+        return text
+
+    def add_latent_topics(self, n_components):
+        X = self.process_text('bill_xml', 'Content')
+        print "text processing complete"
+        ltm = self.get_latent_topic_mat(X, n_components)
+        # ltm_df = pd.DataFrame(ltm, index=range(self.df.shape[0]))
+        # self.df.index=range(self.df.shape[0])
+        # newdf = pd.concat([self.df, ltm_df], axis=1)
+        ltm_df = pd.DataFrame(ltm)
+        self.df = pd.concat([self.df, ltm_df], axis=1)
+
+    def random_subset(self, nrows_to_keep):
+        np.random.seed(123)
+        keepers = np.random.choice(range(self.df.shape[0]), size=nrows_to_keep, replace=False)
+        self.df = self.df.iloc[keepers,:]
+
+    def prepare(self, regression=False, predict=False, test=False, n_components=2):
         """Executes all cleaning methods in proper order. If regression, remove one
         dummy column and scale numeric columns for regularization"""
-        import ipdb; ipdb.set_trace()
         self.drop_na()
         self.make_session_type()
-        self.df = self.df[['party', 'passed']]
-        if regression:
-            self.dummify(['party'], regression=True)
-        else:
-            self.dummify(['party'])
+        # self.df = self.df[['party', 'passed']]
         # if regression:
-        #     self.dummify(['urgency', 'taxlevy', 'appropriation', 'party'], regression=True)
+        #     self.dummify(['party'], regression=True)
         # else:
-        #     self.dummify(['urgency', 'taxlevy', 'appropriation', 'party'])
-        # self.bucket_vote_required()
-        #todrop = [u'bill_id', u'session_year', u'session_num', u'measure_type', u'fiscal_committee', u'earliest_bvid']
-        #self.drop_some_cols(todrop)
+        #     self.dummify(['party'])
+        if regression:
+            self.dummify(['urgency', 'taxlevy', 'appropriation', 'party'], regression=True)
+        else:
+            self.dummify(['urgency', 'taxlevy', 'appropriation', 'party'])
+        self.bucket_vote_required()
 
+        # add latent topics
+        self.add_latent_topics(n_components)
+
+        todrop = [u'bill_id', u'session_year', u'session_num', u'measure_type', u'fiscal_committee', u'bill_version_id', u'bill_xml']
+        self.drop_some_cols(todrop)
 
         y = self.df.pop('passed').values
         X = self.df.values
@@ -122,3 +191,10 @@ def agg_parties(list_of_parties):
         return "COM"
     else:
         return "BOTH"
+
+def tokenize(text):
+    """Tokenize and stem a block of text"""
+    bill_content = TextBlob(text).lower()
+    bill_words = bill_content.words
+    bill_words_stemmed = [wordlist.stem() for wordlist in bill_words]
+    return bill_words_stemmed

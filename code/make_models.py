@@ -1,11 +1,12 @@
-from data_cleaning import DataCleaning
+from data_cleaning import DataPrep
 from sklearn.dummy import DummyClassifier
 from sklearn.model_selection import cross_val_score
 from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
+from datetime import datetime
 
-class Pipeline(object):
-    """This pipeline object takes in cleaned data and provides methods necessary to train and predict
+class ModelChooser(object):
+    """This ModelChooser object takes in cleaned data and provides methods necessary to train and predict
     multiple types of models. The goal is to make a clean, customizable interface for comparing models"""
 
     def __init__(self, list_of_models):
@@ -62,34 +63,33 @@ class Pipeline(object):
             scores.append(f1_score(y_test, predictions))
         return scores
 
+
+
 def main():
-    query = """SELECT b.bill_id, b.session_year, session_num, measure_type, e.urgency, datediff(e.earliest_date,sd.start_date) as days_since_start, e.appropriation, e.vote_required, e.taxlevy, e.fiscal_committee, b.passed
-    FROM bill_tbl b
-    left join (select earliest.bill_id, earliest.earliest_date, bv.bill_version_id as earliest_bvid, bv.urgency, bv.appropriation, bv.vote_required, bv.taxlevy, bv.fiscal_committee from
-				(select bill_id, min(bill_version_action_date) as earliest_date from bill_version_tbl
-				group by bill_id) earliest
-				join bill_version_tbl bv on (earliest.bill_id=bv.bill_id and earliest.earliest_date=bv.bill_version_action_date)) e
-    on b.bill_id=e.bill_id
-    join start_dates sd on b.session_year=sd.session_year
-    where b.measure_type in ('AB' , 'SB')"""
-    cleaner = DataCleaning()
-    X_train, y_train = cleaner.clean()
+    for k in range(3,20):
+        print "start time: {}".format(datetime.now())
+        print "using {} latent topics".format(k)
+        prep = DataPrep()
+        X_train, y_train = prep.prepare(n_components=k)
+        print "regular data prep complete"
 
-    reg_cleaner = DataCleaning()
-    X_train_reg, y_train_reg = reg_cleaner.clean(regression=True)
+        # reg_prep = DataPrep()
+        # X_train_reg, y_train_reg = reg_prep.prepare(regression=True, n_components=k)
+        # print "regression data prep complete"
 
-    baseline = DummyClassifier
-    rf = RandomForestClassifier
-    gb = GradientBoostingClassifier
+        rf = RandomForestClassifier
+        gb = GradientBoostingClassifier
 
-    pipe = Pipeline([baseline, rf, gb])
-    pipe.fit_predict(X_train, y_train)
-    pipe.print_cv_results(X_train, y_train)
+        mc = ModelChooser([rf, gb])
+        mc.fit_predict(X_train, y_train)
+        mc.print_cv_results(X_train, y_train)
 
-    logr = LogisticRegression
-    regression_pipe = Pipeline([logr])
-    regression_pipe.fit_predict(X_train_reg, y_train_reg)
-    regression_pipe.print_cv_results(X_train_reg, y_train_reg)
+        # logr = LogisticRegression
+        # regression_mc = ModelChooser([logr])
+        # regression_mc.fit_predict(X_train_reg, y_train_reg)
+        # regression_mc.print_cv_results(X_train_reg, y_train_reg)
+        print "end time: {}".format(datetime.now())
+        print "-"*10
 
 
 

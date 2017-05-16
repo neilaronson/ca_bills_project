@@ -1,3 +1,4 @@
+#no longer being used, replaced by text_make_models.py
 import get_sql
 import pandas as pd
 from bs4 import BeautifulSoup
@@ -7,6 +8,8 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.model_selection import cross_val_score
 
 def get_bill_text(xml, field):
+    """Finds all tags of field in given xml and returns them as one string
+    separated by space if there's more than one"""
     soup = BeautifulSoup(xml, "xml")
     results = [raw.text for raw in soup.find_all(field)]
     text = " ".join(results)
@@ -20,6 +23,7 @@ def process(df, column_name):
     return bill_words_stemmed
 
 def process2(df, column_name):
+    """Run each text row of column_name through BS to extract content from the specified XML field"""
     bill_soup = df[column_name].values
     bill_content = [get_bill_text(soup, 'Content') for soup in bill_soup]
     return bill_content
