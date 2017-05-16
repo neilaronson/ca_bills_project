@@ -31,8 +31,7 @@ class DataPrep(object):
             left join bill_version_tbl bv
             on b.bill_id=bv.bill_id and bv.bill_version_id like '%INT'
             join start_dates sd on b.session_year=sd.session_year and b.session_num=sd.session_num
-            where b.measure_type in ('AB' , 'SB') and b.session_year < '2015'
-            """
+            where b.measure_type in ('AB' , 'SB') and b.session_year < '2015'"""
         bills_df = get_sql.get_df(bills_query)
 
 
