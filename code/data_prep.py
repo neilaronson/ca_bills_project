@@ -6,6 +6,7 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from textblob import TextBlob
 from sklearn.decomposition import NMF
 import cPickle as pickle
+from datetime import datetime
 
 class DataPrep(object):
     """An object to clean and wrangle data into format for a model"""
@@ -105,8 +106,17 @@ class DataPrep(object):
         """Uses session_num to make a column indicating if it was regular session (0) or Extraordinary session(1)"""
         self.df['session_type'] = self.df['session_num'].apply(lambda session: 0 if session=='0' else 1)
 
-    def get_latent_topic_mat(self, X_data, n_components):
-        tfidf_mat = self.get_tfidf_mat(X_data)
+    def get_latent_topic_mat(self, n_components, use_cached_tfidf, cache_tfidf, X_data=None):
+        if use_cached_tfidf:
+            with open(use_cached_tfidf) as p:
+                tfidf_mat = pickle.load(p)
+        else:
+            tfidf_mat = self.get_tfidf_mat(X_data)
+            if cache_tfidf:
+                current_time = datetime.now().strftime(format='%m-%d-%y-%H-%M')
+                filename = "../data/cached_tfidf_"+current_time+".pkl"
+                with open(filename, 'w') as p:
+                    pickle.dump(tfidf_mat, p)
         print "tfidf complete"
         nmf_mat = self.get_nmf_mat(tfidf_mat, n_components)
         print "nmf complete"
@@ -137,10 +147,24 @@ class DataPrep(object):
         text = " ".join(results)
         return text
 
-    def add_latent_topics(self, n_components):
-        X = self.process_text('bill_xml', 'Content')
+    def add_latent_topics(self, n_components, use_cached_processing=None, use_cached_tfidf=None, cache_processing=False, cache_tfidf=False):
+        import ipdb; ipdb.set_trace()
+        if not use_cached_tfidf:
+            if use_cached_processing:
+                with open(use_cached_processing) as p:
+                    X = pickle.load(p)
+            else:
+                X = self.process_text('bill_xml', 'Content')
+                if cache_processing:
+                    current_time = datetime.now().strftime(format='%m-%d-%y-%H-%M')
+                    filename = "../data/cached_processed_text_"+current_time+".pkl"
+                    with open(filename, 'w') as p:
+                        pickle.dump(X, p)
+            ltm = self.get_latent_topic_mat(n_components, use_cached_tfidf, cache_tfidf, X_data=X)
+        else:
+            ltm = self.get_latent_topic_mat(n_components, use_cached_tfidf, cache_tfidf)
         print "text processing complete"
-        ltm = self.get_latent_topic_mat(X, n_components)
+
         # ltm_df = pd.DataFrame(ltm, index=range(self.df.shape[0]))
         # self.df.index=range(self.df.shape[0])
         # newdf = pd.concat([self.df, ltm_df], axis=1)
