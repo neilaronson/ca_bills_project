@@ -1,4 +1,4 @@
-from data_cleaning import DataPrep
+from data_prep import DataPrep
 from sklearn.dummy import DummyClassifier
 from sklearn.model_selection import cross_val_score
 from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
@@ -69,7 +69,8 @@ def main():
     for k in range(3,20):
         print "start time: {}".format(datetime.now())
         print "using {} latent topics".format(k)
-        prep = DataPrep()
+        prep = DataPrep(filepath='../data/full_data.csv')
+        #prep = DataPrep()
         X_train, y_train = prep.prepare(n_components=k)
         print "regular data prep complete"
 
