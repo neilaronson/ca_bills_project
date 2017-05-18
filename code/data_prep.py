@@ -105,7 +105,9 @@ class DataPrep(object):
         before = self.df.shape[0]
         self.df = self.df.dropna(axis=0, how='any')
         after = self.df.shape[0]
-        self.df = self.df.reset_index()
+        if (before-after) > 0:
+            self.df = self.df.reset_index()
+            self.df = self.df.drop('index', axis=1)
         print "dropped {} rows".format(before-after)
 
     def bucket_vote_required(self):
@@ -124,7 +126,7 @@ class DataPrep(object):
     #     print "nmf complete"
     #     return nmf_mat
 
-    def run_tfidf(self, use_cached_tfidf, cache_tfidf, X_data=None, **kwargs):
+    def run_tfidf(self, use_cached_tfidf, cache_tfidf, X_data=None, **tfidfargs):
         """Apply TFIDF and get back transformed matrix"""
         if use_cached_tfidf:
             with open(use_cached_tfidf) as p:
@@ -132,13 +134,14 @@ class DataPrep(object):
                 tfidf_mat = tfidf_contents[1]
             print "loaded tfidf"
         else: #not using a cached tfidf, will have to generate
-            tfidf = TfidfVectorizer(**kwargs)
+            tfidf = TfidfVectorizer(tokenizer=tokenize, **tfidfargs)
             tfidf_mat = tfidf.fit_transform(X_data)
             if cache_tfidf:
                 current_time = datetime.now().strftime(format='%m-%d-%y-%H-%M')
                 filename = "../data/cached_tfidf_"+current_time+".pkl"
                 with open(filename, 'w') as p:
                     pickle.dump([tfidf, tfidf_mat], p)
+                print "pickled tfidf file at {}".format(filename)
             print "tfidf complete"
         return tfidf_mat
 
@@ -161,6 +164,7 @@ class DataPrep(object):
                 filename = "../data/cached_processed_text_"+current_time+".pkl"
                 with open(filename, 'w') as p:
                     pickle.dump(bill_content, p)
+                print "pickled processed text file at {}".format(filename)
             print "processed text"
         return bill_content
 
@@ -173,23 +177,19 @@ class DataPrep(object):
         text = " ".join(results)
         return text
 
-    def process_and_tfidf(self, use_cached_processing=None, use_cached_tfidf=None, cache_processing=False, cache_tfidf=False, **kwargs):
+    def process_and_tfidf(self, use_cached_processing=None, use_cached_tfidf=None, cache_processing=False, cache_tfidf=False, **tfidfargs):
         if cache_tfidf:  #make sure to cache processing if caching tfidf
             cache_processing=True
         if not use_cached_tfidf:
             X = self.process_text('bill_xml', 'Content', use_cached_processing, cache_processing)
-            tfidf_mat = self.run_tfidf(use_cached_tfidf, cache_tfidf, X_data=X, **kwargs)
+            tfidf_mat = self.run_tfidf(use_cached_tfidf, cache_tfidf, X_data=X, **tfidfargs)
         else: #using cache, don't need to process
             tfidf_mat = self.run_tfidf(use_cached_tfidf, cache_tfidf)
         return tfidf_mat
 
-    def add_latent_topics(self, n_components, use_cached_processing=None, use_cached_tfidf=None, cache_processing=False, cache_tfidf=False):
-        tfidf_mat = self.process_and_tfidf(use_cached_processing, use_cached_tfidf, cache_processing, cache_tfidf, tokenizer=tokenize, stop_words='english', max_features=2000)
+    def add_latent_topics(self, n_components, use_cached_processing=None, use_cached_tfidf=None, cache_processing=False, cache_tfidf=False, **tfidfargs):
+        tfidf_mat = self.process_and_tfidf(use_cached_processing, use_cached_tfidf, cache_processing, cache_tfidf, **tfidfargs)
         ltm = self.get_nmf_mat(tfidf_mat, n_components)
-
-        # ltm_df = pd.DataFrame(ltm, index=range(self.df.shape[0]))
-        # self.df.index=range(self.df.shape[0])
-        # newdf = pd.concat([self.df, ltm_df], axis=1)
         ltm_df = pd.DataFrame(ltm)
         self.df = pd.concat([self.df, ltm_df], axis=1)
 
@@ -198,7 +198,7 @@ class DataPrep(object):
         keepers = np.random.choice(range(self.df.shape[0]), size=nrows_to_keep, replace=False)
         self.df = self.df.iloc[keepers,:]
 
-    def prepare(self, regression=False, predict=False, test=False, n_components=2):
+    def prepare(self, regression=False, n_components=2, use_cached_processing=None, use_cached_tfidf=None, cache_processing=False, cache_tfidf=False, **tfidfargs):
         """Executes all cleaning methods in proper order. If regression, remove one
         dummy column and scale numeric columns for regularization"""
         self.drop_na()
@@ -215,7 +215,7 @@ class DataPrep(object):
         # self.bucket_vote_required()
 
         # add latent topics
-        self.add_latent_topics(n_components, use_cached_tfidf='../data/cached_tfidf_05-17-17-02-39.pkl')
+        self.add_latent_topics(n_components,  use_cached_processing, use_cached_tfidf, cache_processing, cache_tfidf, **tfidfargs)
 
         # todrop = [u'bill_id', u'session_year', u'session_num', u'measure_type', u'fiscal_committee', u'bill_version_id', u'bill_xml']
         todrop = [u'bill_xml']
@@ -225,6 +225,22 @@ class DataPrep(object):
         X = self.df.values
 
         return X, y
+
+    def prepare_amendment_model(self, regression=False):
+        """Executes all preparation for input into amendment model"""
+        self.drop_na()
+        if regression:
+            self.dummify(['urgency', 'taxlevy', 'appropriation'], regression=True)
+        else:
+            self.dummify(['urgency', 'taxlevy', 'appropriation'])
+        self.bucket_vote_required()
+        todrop = [u'session_year', u'session_num', u'measure_type', u'fiscal_committee', u'bill_version_id']
+        self.drop_some_cols(todrop)
+        import ipdb; ipdb.set_trace()
+
+
+        return self.df
+
 
 def agg_parties(list_of_parties):
     """All Dem, Repub, Both, or Committee"""
