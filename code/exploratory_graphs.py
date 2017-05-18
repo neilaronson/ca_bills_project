@@ -3,10 +3,10 @@ import get_sql
 import matplotlib.pyplot as plt
 from datetime import datetime
 import numpy as np
-from data_cleaning import DataCleaning
+from data_prep import DataPrep
 
 current_time = datetime.now().strftime(format='%m-%d-%y-%H-%M')
-# dc = DataCleaning()
+# dc = DataPrep()
 # df = dc.df
 
 def bills_graphs():
@@ -132,4 +132,19 @@ def plot_bill_version_comp(df):
     graph_filename = "../graphs/comp_versions_hist_"+current_time+".png"
     plt.savefig(graph_filename)
 
-bill_version_graphs()
+def bill_amendment_graphs():
+    query = """select bv1.bill_version_id, bv1.bill_id, count(bv2.bill_version_id) as n_prev_versions, b.passed from bill_version_tbl bv1
+        join bill_version_tbl bv2 on bv1.bill_id=bv2.bill_id
+        join bill_tbl b on bv1.bill_id=b.bill_id
+        where bv1.bill_version_id like '%AMD' and bv2.version_num > bv1.version_num
+        group by bv1.bill_version_id"""
+    amendment_df = get_sql.get_df(query)
+    plot_n_amendments(amendment_df)
+
+def plot_n_amendments(df):
+    pd.crosstab(df.n_prev_versions, df.passed, normalize='index').reset_index().plot(x='n_prev_versions',
+        y=1, kind='bar', title='Number amendments vs chance of passing', legend=False)
+    graph_filename = "../graphs/n_amendments_"+current_time+".png"
+    plt.savefig(graph_filename)
+
+bill_amendment_graphs()
