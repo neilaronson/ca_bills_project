@@ -73,7 +73,18 @@ class DataPrep(object):
             join start_dates sd on b.session_year=sd.session_year and b.session_num=sd.session_num
             where b.measure_type in ('AB' , 'SB') and b.session_year < '2015'"""
         bills_df = get_sql.get_df(bills_query)
-        return bills_df
+
+        n_amendments_query = """select bv1.bill_version_id, bv1.bill_id, count(bv2.bill_version_id) as n_prev_versions from bill_version_tbl bv1
+            join bill_version_tbl bv2 on bv1.bill_id=bv2.bill_id
+            where bv1.bill_version_id like '%AMD' and bv2.version_num > bv1.version_num
+            group by bv1.bill_version_id"""
+        n_amendments_df = get_sql.get_df(n_amendments_query)
+
+        merged_df = pd.merge(bills_df, n_amendments_df, on='bill_version_id')
+        merged_df = merged_df.drop('bill_id_y', axis=1)
+        merged_df = merged_df.rename(columns={'bill_id_x': 'bill_id'})
+
+        return merged_df
 
     def aggregate_authors_df(self, authors_df):
         authors_df['party'] = authors_df['party'].fillna('COM')
@@ -226,6 +237,9 @@ class DataPrep(object):
 
         return X, y
 
+    def bucket_n_amendments(self, cutoff):
+        self.df.n_prev_versions = self.df.n_prev_versions.apply(lambda n: 0 if n < cutoff else 1)
+
     def prepare_amendment_model(self, regression=False):
         """Executes all preparation for input into amendment model"""
         self.drop_na()
@@ -236,6 +250,7 @@ class DataPrep(object):
         self.bucket_vote_required()
         todrop = [u'session_year', u'session_num', u'measure_type', u'fiscal_committee', u'bill_version_id']
         self.drop_some_cols(todrop)
+        self.bucket_n_amendments(5)
         import ipdb; ipdb.set_trace()
 
 
