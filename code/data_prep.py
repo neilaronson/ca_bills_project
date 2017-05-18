@@ -83,8 +83,60 @@ class DataPrep(object):
         merged_df = pd.merge(bills_df, n_amendments_df, on='bill_version_id')
         merged_df = merged_df.drop('bill_id_y', axis=1)
         merged_df = merged_df.rename(columns={'bill_id_x': 'bill_id'})
+        merged_df = self.add_authors(merged_df)
 
         return merged_df
+
+    def add_authors(self, df):
+        authors_amendment_query = """SELECT
+                bv.bill_id, bv.bill_version_id, bva.session_year, l.author_name, l.legislator_name, l.district, l.party
+            FROM
+                bill_version_authors_tbl bva
+                    LEFT JOIN
+                legislator_tbl l ON bva.name = l.author_name
+                    AND l.session_year = bva.session_year
+                    JOIN
+                bill_version_tbl bv ON bv.bill_version_id = bva.bill_version_id
+            WHERE
+                contribution = 'LEAD_AUTHOR'
+            		AND bv.bill_id < '2015'
+                    AND bva.bill_version_id LIKE '%AMD'
+                    AND (bv.bill_id LIKE '%AB%'
+                    OR bv.bill_id LIKE '%SB%')"""
+        authors_amendment_df = get_sql.get_df(authors_amendment_query)
+        authors_amendment_seniority_df = self.add_seniority(authors_amendment_df)
+
+        authors_amendment_seniority_df = authors_amendment_seniority_df.drop(['bill_id', 'session_year', 'district', 'author_name', 'legislator_name', 'name'], axis=1)
+        authors_amendment_seniority_df = authors_amendment_seniority_df.groupby('bill_version_id').agg({'party': agg_parties, 'nterms': 'mean'}).reset_index()
+
+        return pd.merge(df, authors_amendment_seniority_df, on='bill_version_id')
+
+    def add_seniority(self, df):
+        assembly_df = pd.read_csv('../data/assembly.csv')
+        assembly_df = assembly_df.rename(columns={'0': 'session_year'})
+        assembly_df_melted = pd.melt(assembly_df, id_vars='session_year', var_name='district', value_name='name')
+        assembly_joined = pd.merge(assembly_df_melted, assembly_df_melted, on='name')
+        assembly_joined_conditioned = assembly_joined[assembly_joined.session_year_x >= assembly_joined.session_year_y]
+        assembly_seniority = assembly_joined_conditioned.groupby(['session_year_x', 'district_x', 'name']).count()['session_year_y'].reset_index()
+        assembly_seniority = assembly_seniority.rename(columns={'session_year_x': 'session_year', 'district_x': 'district', 'session_year_y':'nterms'})
+        assembly_seniority['district'] = 'AD' + assembly_seniority['district']
+        assembly_seniority['session_year'] = assembly_seniority['session_year'].str.replace('-', '')
+
+        senate_df = pd.read_csv('../data/senate.csv')
+        senate_df = senate_df.iloc[21:]
+        senate_df = senate_df.rename(columns={'0': 'session_year'})
+        senate_df_melted = pd.melt(senate_df, id_vars='session_year', var_name='district', value_name='name')
+        senate_joined = pd.merge(senate_df_melted, senate_df_melted, on='name')
+        senate_joined_conditioned = senate_joined[senate_joined.session_year_x >= senate_joined.session_year_y]
+        senate_seniority = senate_joined_conditioned.groupby(['session_year_x', 'district_x', 'name']).count()['session_year_y'].reset_index()
+        senate_seniority = senate_seniority.rename(columns={'session_year_x': 'session_year', 'district_x': 'district', 'session_year_y':'nterms'})
+        senate_seniority['district'] = 'SD' + senate_seniority['district']
+        senate_seniority['session_year'] = senate_seniority['session_year'].str.replace('-', '')
+
+        all_seniority = pd.concat([assembly_seniority, senate_seniority])
+
+        return pd.merge(df, all_seniority, on=['district', 'session_year'])
+
 
     def aggregate_authors_df(self, authors_df):
         authors_df['party'] = authors_df['party'].fillna('COM')
@@ -242,7 +294,9 @@ class DataPrep(object):
 
     def prepare_amendment_model(self, regression=False):
         """Executes all preparation for input into amendment model"""
+        import ipdb; ipdb.set_trace()
         self.drop_na()
+        self.make_session_type()
         if regression:
             self.dummify(['urgency', 'taxlevy', 'appropriation'], regression=True)
         else:
@@ -250,9 +304,6 @@ class DataPrep(object):
         self.bucket_vote_required()
         todrop = [u'session_year', u'session_num', u'measure_type', u'fiscal_committee', u'bill_version_id']
         self.drop_some_cols(todrop)
-        self.bucket_n_amendments(5)
-        import ipdb; ipdb.set_trace()
-
 
         return self.df
 
