@@ -1,11 +1,12 @@
 from data_prep import DataPrep
 from sklearn.dummy import DummyClassifier
-from sklearn.model_selection import KFold, cross_val_score
+from sklearn.model_selection import KFold, cross_val_score, GridSearchCV
 from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.tree import DecisionTreeClassifier
 from datetime import datetime
 from bill_kfold import bill_kfold
+import re
 
 class ModelChooser(object):
     """This ModelChooser object takes in cleaned data and provides methods necessary to train and predict
@@ -42,8 +43,20 @@ class ModelChooser(object):
             model.fit(x_data, y_data)
             self.trained_models.append(model)
 
+    def grid_search(self, x_data, y_data, tuning_params, custom_kfold=None):
+        for i, model in enumerate(self.list_of_models):
+            grid = GridSearchCV(model, tuning_params[i], cv=custom_kfold, scoring='f1')
+            grid.fit(x_data, y_data)
+            params = grid.best_params_
+            trained_model = grid.best_estimator_
+            self.trained_models.append(trained_model)
+            p = re.compile(r"(.*)\(.*")
+            model_name = re.match(p, str(trained_model)).group(1)
+            print "for {} model, best parameters were: {}".format(model_name, params)
+            print "its f1 score was: {} \n".format(grid.cv_results_['mean_test_score'][0])
 
-    def predict_and_cv_score(self, x_data, y_data, custom_kfold):
+
+    def predict_and_cv_score(self, x_data, y_data, custom_kfold=None):
         """Used by fit_predict to return model evaluation metrics through cross-validation"""
         f1_scores = []
         recall_scores = []
@@ -68,7 +81,7 @@ class ModelChooser(object):
 
 
 def main():
-    #try_latent_topics_intro_model(3,4)
+    # try_latent_topics_intro_model(3,4)
     test_amendment_model()
 
 def test_amendment_model():
@@ -79,15 +92,19 @@ def test_amendment_model():
     y_train = df.pop('passed').values
     X_train = df.values[:,1:]
 
+    baseline = DummyClassifier()
     gb = GradientBoostingClassifier()
-    baseline = DummyClassifier(strategy='most_frequent')
-    rf = RandomForestClassifier(n_estimators=100)
-    dt = DecisionTreeClassifier()
-    mc = ModelChooser([dt])
 
+    rf = RandomForestClassifier()
+    mc = ModelChooser([baseline, rf])
 
-    mc.fit_predict(X_train, y_train, custom_kfold=bkf)
-    mc.print_cv_results(X_train, y_train)
+    tuning_params = [{'strategy': ['most_frequent']}, {'n_estimators': [10]}, {'n_estimators': [10]}]
+
+    mc.grid_search(X_train, y_train, tuning_params, custom_kfold=bkf)
+    #
+    #
+    # mc.fit_predict(X_train, y_train, custom_kfold=bkf)
+    # mc.print_cv_results(X_train, y_train)
 
 
 def try_latent_topics_intro_model(min_n, max_n):
@@ -104,8 +121,8 @@ def try_latent_topics_intro_model(min_n, max_n):
         # X_train_reg, y_train_reg = reg_prep.prepare(regression=True, n_components=k)
         # print "regression data prep complete"
 
-        rf = RandomForestClassifier
-        gb = GradientBoostingClassifier
+        rf = RandomForestClassifier()
+        gb = GradientBoostingClassifier()
 
         mc = ModelChooser([rf, gb])
         mc.fit_predict(X_train, y_train)
