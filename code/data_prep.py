@@ -103,12 +103,14 @@ class DataPrep(object):
                     AND bva.bill_version_id LIKE '%AMD'
                     AND (bv.bill_id LIKE '%AB%'
                     OR bv.bill_id LIKE '%SB%')"""
+
         authors_amendment_df = get_sql.get_df(authors_amendment_query)
+        authors_amendment_df['party'] = authors_amendment_df['party'].fillna('COM')
         authors_amendment_seniority_df = self.add_seniority(authors_amendment_df)
 
         authors_amendment_seniority_df = authors_amendment_seniority_df.drop(['bill_id', 'session_year', 'district', 'author_name', 'legislator_name', 'name'], axis=1)
         authors_amendment_seniority_df = authors_amendment_seniority_df.groupby('bill_version_id').agg({'party': agg_parties, 'nterms': 'mean'}).reset_index()
-
+        authors_amendment_seniority_df.nterms[authors_amendment_seniority_df['nterms'].isnull()] = -1000
         return pd.merge(df, authors_amendment_seniority_df, on='bill_version_id')
 
     def add_seniority(self, df):
@@ -135,7 +137,7 @@ class DataPrep(object):
 
         all_seniority = pd.concat([assembly_seniority, senate_seniority])
 
-        return pd.merge(df, all_seniority, on=['district', 'session_year'])
+        return pd.merge(df, all_seniority, on=['district', 'session_year'], how='left')
 
 
     def aggregate_authors_df(self, authors_df):
@@ -294,16 +296,17 @@ class DataPrep(object):
 
     def prepare_amendment_model(self, regression=False):
         """Executes all preparation for input into amendment model"""
-        import ipdb; ipdb.set_trace()
         self.drop_na()
         self.make_session_type()
         if regression:
-            self.dummify(['urgency', 'taxlevy', 'appropriation'], regression=True)
+            self.dummify(['urgency', 'taxlevy', 'appropriation', 'party'], regression=True)
         else:
-            self.dummify(['urgency', 'taxlevy', 'appropriation'])
+            self.dummify(['urgency', 'taxlevy', 'appropriation', 'party'])
         self.bucket_vote_required()
         todrop = [u'session_year', u'session_num', u'measure_type', u'fiscal_committee', u'bill_version_id']
+        # ['days_since_start', 'vote_required', 'n_prev_versions', 'nterms', 'session_type', 'urgency_No', 'urgency_Yes', 'taxlevy_No', 'taxlevy_Yes',  'appropriation_Yes']
         self.drop_some_cols(todrop)
+        print "Using these features: {}".format(", ".join(self.df.columns))
 
         return self.df
 
