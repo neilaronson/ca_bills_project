@@ -6,8 +6,8 @@ import numpy as np
 from data_prep import DataPrep
 
 current_time = datetime.now().strftime(format='%m-%d-%y-%H-%M')
-# dc = DataPrep()
-# df = dc.df
+dc = DataPrep(filepath='../data/intro_data_5_18_2.csv')
+df = dc.df
 
 def bills_graphs():
     df['vote_required'] = df['vote_required'].apply(lambda vote: 'Majority' if vote=='Majority' else 'More than Majority')
@@ -21,6 +21,16 @@ def bills_graphs():
     plot_session_type(df)
     plot_days_hist(df)
     plot_days_comparison_hist(df)
+    plot_seniority(df)
+
+def plot_seniority(df):
+    no_committees = df[df.party!='COM']
+    avg_terms_passed = no_committees[['passed', 'nterms']].groupby('passed').mean()
+    no_committees['seniority_bucket'] = pd.cut(no_committees.nterms, bins=[0,1,2,3,4,5,6,21])
+    bucket_pass_rates = no_committees[['seniority_bucket', 'passed']].groupby('seniority_bucket').agg(['mean', 'count']).reset_index()
+    bucket_pass_rates.plot(x='seniority_bucket', y=0, kind='bar', legend=False, title='Percent passed by average seniority of cosponsors')
+    graph_filename = "../graphs/seniority_"+current_time+".png"
+    plt.savefig(graph_filename)
 
 def plot_urgency(df):
     pd.crosstab(df.urgency, df.passed, normalize='index').reset_index().plot(x='urgency',
@@ -147,4 +157,4 @@ def plot_n_amendments(df):
     graph_filename = "../graphs/n_amendments_"+current_time+".png"
     plt.savefig(graph_filename)
 
-bill_amendment_graphs()
+bills_graphs()
