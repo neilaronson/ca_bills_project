@@ -38,7 +38,7 @@ class DataPrep(object):
 
 
         authors_query = """SELECT
-                bv.bill_id, l.author_name, l.party
+                bv.bill_id, l.author_name, l.party, l.district, bva.session_year
             FROM
                 bill_version_authors_tbl bva
                     LEFT JOIN
@@ -114,6 +114,13 @@ class DataPrep(object):
         return pd.merge(df, authors_amendment_seniority_df, on='bill_version_id')
 
     def add_seniority(self, df):
+
+        all_seniority = self.make_seniority_data()
+
+
+        return pd.merge(df, all_seniority, on=['district', 'session_year'], how='left')
+
+    def make_seniority_data(self):
         assembly_df = pd.read_csv('../data/assembly.csv')
         assembly_df = assembly_df.rename(columns={'0': 'session_year'})
         assembly_df_melted = pd.melt(assembly_df, id_vars='session_year', var_name='district', value_name='name')
@@ -122,6 +129,7 @@ class DataPrep(object):
         assembly_seniority = assembly_joined_conditioned.groupby(['session_year_x', 'district_x', 'name']).count()['session_year_y'].reset_index()
         assembly_seniority = assembly_seniority.rename(columns={'session_year_x': 'session_year', 'district_x': 'district', 'session_year_y':'nterms'})
         assembly_seniority['district'] = 'AD' + assembly_seniority['district']
+        assembly_seniority['district'] = assembly_seniority['district'].apply(lambda x: x[:2]+str(0)+x[2] if len(x)==3 else x)
         assembly_seniority['session_year'] = assembly_seniority['session_year'].str.replace('-', '')
 
         senate_df = pd.read_csv('../data/senate.csv')
@@ -133,21 +141,38 @@ class DataPrep(object):
         senate_seniority = senate_joined_conditioned.groupby(['session_year_x', 'district_x', 'name']).count()['session_year_y'].reset_index()
         senate_seniority = senate_seniority.rename(columns={'session_year_x': 'session_year', 'district_x': 'district', 'session_year_y':'nterms'})
         senate_seniority['district'] = 'SD' + senate_seniority['district']
+        senate_seniority['district'] = senate_seniority['district'].apply(lambda x: x[:2]+str(0)+x[2] if len(x)==3 else x)
         senate_seniority['session_year'] = senate_seniority['session_year'].str.replace('-', '')
 
         all_seniority = pd.concat([assembly_seniority, senate_seniority])
 
-        return pd.merge(df, all_seniority, on=['district', 'session_year'], how='left')
+        aswd = all_seniority[['session_year', 'name', 'nterms']]
+        wo_district = pd.merge(aswd, aswd, on='name')
+        wo_district = wo_district[wo_district.session_year_x >= wo_district.session_year_y]
+        total_seniority = wo_district.groupby(['session_year_x', 'name']).count()['session_year_y'].reset_index()
+        total_seniority = total_seniority.rename(columns={'session_year_x': 'session_year', 'session_year_y':'nterms'})
+
+        final_seniority = pd.merge(all_seniority, total_seniority, on=['name', 'session_year'])
+        final_seniority = final_seniority.rename(columns={'nterms_x': 'nterms_in_house', 'nterms_y': 'nterms'})
+        return final_seniority
 
 
     def aggregate_authors_df(self, authors_df):
+        all_seniority = self.make_seniority_data()
+
         authors_df['party'] = authors_df['party'].fillna('COM')
-        party_df = authors_df[['bill_id', 'party']].groupby('bill_id').agg(agg_parties)
-        cosponsor_count_df = authors_df[['bill_id', 'party']].groupby('bill_id').count()
-        cosponsor_count_df = cosponsor_count_df.rename(columns={'party': 'n_authors'})
-        cosponsor_count_df['committee'] = (cosponsor_count_df['n_authors']==0).astype(int)
-        merged_df = pd.merge(party_df, cosponsor_count_df, left_index=True, right_index=True).reset_index()
-        return merged_df
+        authors_party_seniority_df = pd.merge(authors_df, all_seniority, on=['district', 'session_year'], how='left')
+
+        grouped_party_seniority = authors_party_seniority_df[['bill_id', 'party', 'nterms']].groupby('bill_id')
+        grouped_party_seniority = grouped_party_seniority.agg({'party': agg_parties, 'nterms': 'mean'}).reset_index()
+
+        grouped_party_seniority.nterms[grouped_party_seniority['nterms'].isnull()] = -1000
+
+        # cosponsor_count_df = authors_df[['bill_id', 'party']].groupby('bill_id').count()
+        # cosponsor_count_df = cosponsor_count_df.rename(columns={'party': 'n_authors'})
+        # cosponsor_count_df['committee'] = (cosponsor_count_df['n_authors']==0).astype(int)
+        # merged_df = pd.merge(party_df, cosponsor_count_df, left_index=True, right_index=True).reset_index()
+        return grouped_party_seniority
 
     def dummify(self, columns, regression=False):
         """Create dummy columns for categorical variables"""
@@ -266,9 +291,11 @@ class DataPrep(object):
     def prepare(self, regression=False, n_components=2, use_cached_processing=None, use_cached_tfidf=None, cache_processing=False, cache_tfidf=False, **tfidfargs):
         """Executes all cleaning methods in proper order. If regression, remove one
         dummy column and scale numeric columns for regularization"""
+        import ipdb; ipdb.set_trace()
         self.drop_na()
         self.make_session_type()
-        self.df = self.df[['party', 'passed', 'bill_xml']]
+        self.df = self.df[['party', 'passed', 'bill_xml', 'nterms']]
+        # self.df['text_length'] = [len(content) for content in self.process_text('bill_xml', 'Content', use_cached_processing='../data/cached_processed_text_05-19-17-00-54.pkl')]
         if regression:
             self.dummify(['party'], regression=True)
         else:
@@ -280,13 +307,14 @@ class DataPrep(object):
         # self.bucket_vote_required()
 
         # add latent topics
-        self.add_latent_topics(n_components,  use_cached_processing, use_cached_tfidf, cache_processing, cache_tfidf, **tfidfargs)
+        #self.add_latent_topics(n_components,  use_cached_processing, use_cached_tfidf, cache_processing, cache_tfidf, **tfidfargs)
 
         # todrop = [u'bill_id', u'session_year', u'session_num', u'measure_type', u'fiscal_committee', u'bill_version_id', u'bill_xml']
         todrop = [u'bill_xml']
         self.drop_some_cols(todrop)
 
         y = self.df.pop('passed').values
+        print "Using these features: {}".format(", ".join(self.df.columns))
         X = self.df.values
 
         return X, y
