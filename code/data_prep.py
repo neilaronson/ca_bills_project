@@ -21,9 +21,15 @@ class DataPrep(object):
             if query:
                 self.df = get_sql.get_df(query)
             elif filepath:
-                self.df = pd.read_csv(filepath)
+                reader = pd.read_csv(filepath, chunksize=1000)
+                self.df = pd.DataFrame()
+                chunks = [chunk for chunk in reader]
+                self.df = pd.concat(chunks)
+                nrows = self.df.shape[0]
+                print "loaded csv, {} rows".format(nrows)
             elif amendment_model:
                 self.df = self.amendment_data()
+                self.df['content'] = [content for content in self.process_text('bill_xml', 'Content')]
             else: # default queries
                 self.df = self.default_data()
 
@@ -294,29 +300,31 @@ class DataPrep(object):
         keepers = np.random.choice(range(self.df.shape[0]), size=nrows_to_keep, replace=False)
         self.df = self.df.iloc[keepers,:]
 
-    def prepare(self, regression=False, n_components=2, use_cached_processing=None, use_cached_tfidf=None, cache_processing=False, cache_tfidf=False, **tfidfargs):
+    def prepare(self, save=False, regression=False, n_components=2, use_cached_tfidf=None, cache_tfidf=False, **tfidfargs):
         """Executes all cleaning methods in proper order. If regression, remove one
         dummy column and scale numeric columns for regularization"""
         self.drop_na()
         self.make_session_type()
-        self.df = self.df[['party', 'passed', 'bill_xml']]
+        # self.df = self.df[['party', 'passed', 'bill_xml']]
         # self.df['text_length'] = [len(content) for content in self.process_text('bill_xml', 'Content', use_cached_processing='../data/cached_processed_text_05-19-17-00-54.pkl')]
         if regression:
-            self.dummify(['party'], regression=True)
+            self.dummify(['party', 'urgency', 'appropriation', 'taxlevy', 'fiscal_committee'], regression=True)
         else:
-            self.dummify(['party'])
-        # if regression:
-        #     self.dummify(['urgency', 'taxlevy', 'appropriation', 'party'], regression=True)
-        # else:
-        #     self.dummify(['urgency', 'taxlevy', 'appropriation', 'party'])
-        # self.bucket_vote_required()
+            self.dummify(['party', 'urgency', 'appropriation', 'taxlevy', 'fiscal_committee'])
+        self.bucket_vote_required()
 
         # add latent topics
-        self.add_latent_topics(n_components,  use_cached_processing, use_cached_tfidf, cache_processing, cache_tfidf, **tfidfargs)
+        # if use_text:
+        #     self.add_latent_topics(n_components,  use_cached_processing, use_cached_tfidf, cache_processing, cache_tfidf, **tfidfargs)
 
         # todrop = [u'bill_id', u'session_year', u'session_num', u'measure_type', u'fiscal_committee', u'bill_version_id', u'bill_xml']
         todrop = [u'bill_xml']
         self.drop_some_cols(todrop)
+
+        if save:
+            current_time = datetime.now().strftime(format='%m-%d-%y-%H-%M')
+            filename = "../data/intro_data_" + current_time + ".csv"
+            self.df.to_csv(filename, index=False, encoding='utf-8')
 
         y = self.df.pop('passed').values
         print "Using these features: {}".format(", ".join([str(col) for col in self.df.columns]))
@@ -324,11 +332,20 @@ class DataPrep(object):
 
         return X, y
 
+    def subset(self, features):
+        features.append('passed')
+        self.df = self.df[features]
+        y = self.df.pop('passed').values
+        X = self.df.values
+        return X, y
+
     def bucket_n_amendments(self, cutoff):
         self.df.n_prev_versions = self.df.n_prev_versions.apply(lambda n: 0 if n < cutoff else 1)
 
-    def prepare_amendment_model(self, regression=False):
+    def prepare_amendment_model(self, save=False, regression=False):
         """Executes all preparation for input into amendment model"""
+        import ipdb; ipdb.set_trace()
+
         self.drop_na()
         self.make_session_type()
         if regression:
@@ -336,10 +353,18 @@ class DataPrep(object):
         else:
             self.dummify(['urgency', 'taxlevy', 'appropriation', 'party'])
         self.bucket_vote_required()
+
+        self.add_latent_topics(20,  use_cached_tfidf='../data/cached_tfidf_05-19-17-20-07.pkl')
+        if save:
+            current_time = datetime.now().strftime(format='%m-%d-%y-%H-%M')
+            filename = "../data/amendment_data_" + current_time + ".csv"
+            self.df.to_csv(filename, index=False, encoding='utf-8')
+
         todrop = [u'session_year', u'session_num', u'measure_type', u'fiscal_committee', u'bill_version_id']
         # ['days_since_start', 'vote_required', 'n_prev_versions', 'nterms', 'session_type', 'urgency_No', 'urgency_Yes', 'taxlevy_No', 'taxlevy_Yes',  'appropriation_Yes']
         self.drop_some_cols(todrop)
-        print "Using these features: {}".format(", ".join(self.df.columns))
+
+        print "Using these features: {}".format(", ".join([str(col) for col in self.df.columns]))
 
         return self.df
 
