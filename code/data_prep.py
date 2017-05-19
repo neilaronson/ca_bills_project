@@ -85,6 +85,11 @@ class DataPrep(object):
         merged_df = merged_df.rename(columns={'bill_id_x': 'bill_id'})
         merged_df = self.add_authors(merged_df)
 
+        text_query = """select bv.bill_version_id, bv.bill_xml from bill_version_tbl bv
+            where bv.bill_version_id like '%AMD'"""
+        text_df = get_sql.get_df(text_query)
+        merged_df = pd.merge(text_df, merged_df, on='bill_version_id')
+
         return merged_df
 
     def add_authors(self, df):
@@ -291,7 +296,6 @@ class DataPrep(object):
     def prepare(self, regression=False, n_components=2, use_cached_processing=None, use_cached_tfidf=None, cache_processing=False, cache_tfidf=False, **tfidfargs):
         """Executes all cleaning methods in proper order. If regression, remove one
         dummy column and scale numeric columns for regularization"""
-        import ipdb; ipdb.set_trace()
         self.drop_na()
         self.make_session_type()
         self.df = self.df[['party', 'passed', 'bill_xml', 'nterms']]
