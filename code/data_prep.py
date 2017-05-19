@@ -215,11 +215,11 @@ class DataPrep(object):
         """Uses session_num to make a column indicating if it was regular session (0) or Extraordinary session(1)"""
         self.df['session_type'] = self.df['session_num'].apply(lambda session: 0 if session=='0' else 1)
 
-    # def get_latent_topic_mat(self, n_components, use_cached_tfidf, cache_tfidf, X_data=None):
-    #     tfidf_mat =
-    #     nmf_mat = self.get_nmf_mat(tfidf_mat, n_components)
-    #     print "nmf complete"
-    #     return nmf_mat
+    def make_corpus(self, X_data):
+        for i, bill in enumerate(X_data):
+            if i % 100 == 0:
+                print "on document {} of {}".format(i, len(X_data))
+            yield bill
 
     def run_tfidf(self, use_cached_tfidf, cache_tfidf, X_data=None, **tfidfargs):
         """Apply TFIDF and get back transformed matrix"""
@@ -229,8 +229,9 @@ class DataPrep(object):
                 tfidf_mat = tfidf_contents[1]
             print "loaded tfidf"
         else: #not using a cached tfidf, will have to generate
+            corpus = self.make_corpus(X_data)
             tfidf = TfidfVectorizer(tokenizer=tokenize, **tfidfargs)
-            tfidf_mat = tfidf.fit_transform(X_data)
+            tfidf_mat = tfidf.fit_transform(corpus)
             if cache_tfidf:
                 current_time = datetime.now().strftime(format='%m-%d-%y-%H-%M')
                 filename = "../data/cached_tfidf_"+current_time+".pkl"
@@ -273,7 +274,7 @@ class DataPrep(object):
         return text
 
     def process_and_tfidf(self, use_cached_processing=None, use_cached_tfidf=None, cache_processing=False, cache_tfidf=False, **tfidfargs):
-        if cache_tfidf:  #make sure to cache processing if caching tfidf
+        if cache_tfidf and not use_cached_processing:  #make sure to cache processing if caching tfidf
             cache_processing=True
         if not use_cached_tfidf:
             X = self.process_text('bill_xml', 'Content', use_cached_processing, cache_processing)
@@ -298,7 +299,7 @@ class DataPrep(object):
         dummy column and scale numeric columns for regularization"""
         self.drop_na()
         self.make_session_type()
-        self.df = self.df[['party', 'passed', 'bill_xml', 'nterms']]
+        self.df = self.df[['party', 'passed', 'bill_xml']]
         # self.df['text_length'] = [len(content) for content in self.process_text('bill_xml', 'Content', use_cached_processing='../data/cached_processed_text_05-19-17-00-54.pkl')]
         if regression:
             self.dummify(['party'], regression=True)
@@ -311,14 +312,14 @@ class DataPrep(object):
         # self.bucket_vote_required()
 
         # add latent topics
-        #self.add_latent_topics(n_components,  use_cached_processing, use_cached_tfidf, cache_processing, cache_tfidf, **tfidfargs)
+        self.add_latent_topics(n_components,  use_cached_processing, use_cached_tfidf, cache_processing, cache_tfidf, **tfidfargs)
 
         # todrop = [u'bill_id', u'session_year', u'session_num', u'measure_type', u'fiscal_committee', u'bill_version_id', u'bill_xml']
         todrop = [u'bill_xml']
         self.drop_some_cols(todrop)
 
         y = self.df.pop('passed').values
-        print "Using these features: {}".format(", ".join(self.df.columns))
+        print "Using these features: {}".format(", ".join([str(col) for col in self.df.columns]))
         X = self.df.values
 
         return X, y
