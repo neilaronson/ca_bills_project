@@ -96,6 +96,25 @@ class DataPrep(object):
         text_df = get_sql.get_df(text_query)
         merged_df = pd.merge(text_df, merged_df, on='bill_version_id')
 
+        previous_committees_query = """SELECT bv.bill_version_id, bv.bill_version_id as bvid2, bsv.SCID
+            from bill_version_tbl bv
+            left join bill_summary_vote_tbl bsv on bv.bill_id=bsv.bill_id and bv.bill_version_action_date > bsv.vote_date_time
+            where bv.bill_version_id  < '2015' and bv.bill_version_id like '%AMD' and (bv.bill_id like '%AB%' or bv.bill_id like '%SB%')"""
+        prev_com = get_sql.get_df(previous_committees_query)
+        import ipdb; ipdb.set_trace()
+        prev_com_pivot = prev_com.pivot_table(index='bvid2', values='bill_version_id', columns='SCID', aggfunc='count', fill_value=0).reset_index()
+        merged_df = pd.merge(merged_df, prev_com_pivot, left_on='bill_version_id', right_on='bvid2', how='left')
+        columns_to_fill = [u'A0',
+           u'A1', u'A10', u'A11', u'A12', u'A13', u'A14', u'A15', u'A16', u'A17',
+           u'A18', u'A19', u'A2', u'A20', u'A21', u'A22', u'A24', u'A25', u'A26',
+           u'A27', u'A28', u'A29', u'A3', u'A30', u'A31', u'A4', u'A5', u'A6',
+           u'A7', u'A8', u'A9', u'AE', u'S0', u'S1', u'S10', u'S11', u'S12',
+           u'S13', u'S14', u'S15', u'S16', u'S17', u'S18', u'S19', u'S2', u'S20',
+           u'S21', u'S22', u'S3', u'S4', u'S5', u'S6', u'S7', u'S8', u'S9']
+        merged_df = merged_df.drop('bvid2', axis=1)
+
+        merged_df[columns_to_fill] = merged_df[columns_to_fill].fillna(value=0)
+
         return merged_df
 
     def add_authors(self, df):
@@ -292,7 +311,6 @@ class DataPrep(object):
         return text
 
     def process_and_tfidf(self, use_cached_processing=None, use_cached_tfidf=None, cache_processing=False, cache_tfidf=False, identifier=None, **tfidfargs):
-        import ipdb; ipdb.set_trace()
         if cache_tfidf and not use_cached_processing:  #make sure to cache processing if caching tfidf
             cache_processing=True
         if not use_cached_tfidf:
