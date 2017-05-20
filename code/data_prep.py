@@ -211,6 +211,16 @@ class DataPrep(object):
             self.df = self.df.drop('index', axis=1)
         print "dropped {} rows".format(before-after)
 
+    def drop_na_by_col(self, columns):
+        before = self.df.shape[0]
+        self.df = self.df.dropna(axis=columns, how='any')
+        after = self.df.shape[0]
+        if (before-after) > 0:
+            self.df = self.df.reset_index()
+            self.df = self.df.drop('index', axis=1)
+        print "dropped {} rows".format(before-after)
+
+
     def bucket_vote_required(self):
         """Separate all bills that require a simple majority from other types of bills that require more than
         a simple majority. There should really only be 2/3, so this function adds the
@@ -227,7 +237,7 @@ class DataPrep(object):
                 print "on document {} of {}".format(i, len(X_data))
             yield bill
 
-    def run_tfidf(self, use_cached_tfidf, cache_tfidf, X_data=None, **tfidfargs):
+    def run_tfidf(self, use_cached_tfidf, cache_tfidf, X_data=None, identifier=None, **tfidfargs):
         """Apply TFIDF and get back transformed matrix"""
         if use_cached_tfidf:
             with open(use_cached_tfidf) as p:
@@ -235,14 +245,15 @@ class DataPrep(object):
                 tfidf_mat = tfidf_contents[1]
             print "loaded tfidf"
         else: #not using a cached tfidf, will have to generate
+            identifiers = self.df[identifier].values
             corpus = self.make_corpus(X_data)
             tfidf = TfidfVectorizer(tokenizer=tokenize, **tfidfargs)
             tfidf_mat = tfidf.fit_transform(corpus)
             if cache_tfidf:
                 current_time = datetime.now().strftime(format='%m-%d-%y-%H-%M')
-                filename = "../data/cached_tfidf_"+current_time+".pkl"
+                filename = "/home/ubuntu/extra/data/cached_tfidf_"+current_time+".pkl"
                 with open(filename, 'w') as p:
-                    pickle.dump([tfidf, tfidf_mat], p)
+                    pickle.dump([tfidf, tfidf_mat, identifiers], p)
                 print "pickled tfidf file at {}".format(filename)
             print "tfidf complete"
         return tfidf_mat
@@ -252,20 +263,21 @@ class DataPrep(object):
         W = nmf.fit_transform(X_data)
         return W
 
-    def process_text(self, column_name, field, use_cached_processing=None, cache_processing=False):
+    def process_text(self, column_name, field, identifier, use_cached_processing=None, cache_processing=False):
         """Run each text row of column_name through BS to extract content from the specified XML field"""
         if use_cached_processing:
             with open(use_cached_processing) as p:
                 bill_content = pickle.load(p)
                 print "loaded processed text"
         else:
+            identifiers = self.df[identifier].values
             bill_soup = self.df[column_name].values
             bill_content = [self.get_bill_text(soup, field) for soup in bill_soup]
             if cache_processing:
                 current_time = datetime.now().strftime(format='%m-%d-%y-%H-%M')
                 filename = "../data/cached_processed_text_"+current_time+".pkl"
                 with open(filename, 'w') as p:
-                    pickle.dump(bill_content, p)
+                    pickle.dump(zip(identifiers, bill_content), p)
                 print "pickled processed text file at {}".format(filename)
             print "processed text"
         return bill_content
@@ -279,12 +291,17 @@ class DataPrep(object):
         text = " ".join(results)
         return text
 
-    def process_and_tfidf(self, use_cached_processing=None, use_cached_tfidf=None, cache_processing=False, cache_tfidf=False, **tfidfargs):
+    def process_and_tfidf(self, use_cached_processing=None, use_cached_tfidf=None, cache_processing=False, cache_tfidf=False, identifier=None, **tfidfargs):
+        import ipdb; ipdb.set_trace()
         if cache_tfidf and not use_cached_processing:  #make sure to cache processing if caching tfidf
             cache_processing=True
         if not use_cached_tfidf:
-            X = self.process_text('bill_xml', 'Content', use_cached_processing, cache_processing)
-            tfidf_mat = self.run_tfidf(use_cached_tfidf, cache_tfidf, X_data=X, **tfidfargs)
+            if 'content' not in self.df.columns:
+                processed = self.process_text('bill_xml', 'Content', use_cached_processing, cache_processing)
+                self.df['content'] = processed
+            self.df['content'][self.df['content'].isnull()] = " "
+            X = self.df.content.values
+            tfidf_mat = self.run_tfidf(use_cached_tfidf, cache_tfidf, X_data=X, identifier=identifier, **tfidfargs)
         else: #using cache, don't need to process
             tfidf_mat = self.run_tfidf(use_cached_tfidf, cache_tfidf)
         return tfidf_mat
@@ -292,7 +309,8 @@ class DataPrep(object):
     def add_latent_topics(self, n_components, use_cached_processing=None, use_cached_tfidf=None, cache_processing=False, cache_tfidf=False, **tfidfargs):
         tfidf_mat = self.process_and_tfidf(use_cached_processing, use_cached_tfidf, cache_processing, cache_tfidf, **tfidfargs)
         ltm = self.get_nmf_mat(tfidf_mat, n_components)
-        ltm_df = pd.DataFrame(ltm)
+        col_names = ["topic_"+str(i) for i in range(n_components)]
+        ltm_df = pd.DataFrame(ltm, columns=col_names)
         self.df = pd.concat([self.df, ltm_df], axis=1)
 
     def random_subset(self, nrows_to_keep):
@@ -332,9 +350,12 @@ class DataPrep(object):
 
         return X, y
 
-    def subset(self, features):
+    def subset(self, features, return_df=False):
+        import ipdb; ipdb.set_trace()
         features.append('passed')
         self.df = self.df[features]
+        if return_df:
+            return self.df
         y = self.df.pop('passed').values
         X = self.df.values
         return X, y
@@ -342,25 +363,27 @@ class DataPrep(object):
     def bucket_n_amendments(self, cutoff):
         self.df.n_prev_versions = self.df.n_prev_versions.apply(lambda n: 0 if n < cutoff else 1)
 
-    def prepare_amendment_model(self, save=False, regression=False):
+    def prepare_amendment_model(self, n_components=None, save=False, regression=False):
         """Executes all preparation for input into amendment model"""
         import ipdb; ipdb.set_trace()
+        if n_components:
+            self.add_latent_topics(n_components,  use_cached_tfidf='../data/cached_tfidf_05-19-17-20-07.pkl')
 
         self.drop_na()
         self.make_session_type()
         if regression:
-            self.dummify(['urgency', 'taxlevy', 'appropriation', 'party'], regression=True)
+            self.dummify(['party', 'urgency', 'appropriation', 'taxlevy', 'fiscal_committee'], regression=True)
         else:
-            self.dummify(['urgency', 'taxlevy', 'appropriation', 'party'])
+            self.dummify(['party', 'urgency', 'appropriation', 'taxlevy', 'fiscal_committee'])
         self.bucket_vote_required()
 
-        self.add_latent_topics(20,  use_cached_tfidf='../data/cached_tfidf_05-19-17-20-07.pkl')
+
         if save:
             current_time = datetime.now().strftime(format='%m-%d-%y-%H-%M')
             filename = "../data/amendment_data_" + current_time + ".csv"
             self.df.to_csv(filename, index=False, encoding='utf-8')
 
-        todrop = [u'session_year', u'session_num', u'measure_type', u'fiscal_committee', u'bill_version_id']
+        todrop = [u'session_year', u'session_num', u'measure_type', u'fiscal_committee', u'bill_version_id', u'bill_xml']
         # ['days_since_start', 'vote_required', 'n_prev_versions', 'nterms', 'session_type', 'urgency_No', 'urgency_Yes', 'taxlevy_No', 'taxlevy_Yes',  'appropriation_Yes']
         self.drop_some_cols(todrop)
 
@@ -385,5 +408,5 @@ def tokenize(text):
     """Tokenize and stem a block of text"""
     bill_content = TextBlob(text).lower()
     bill_words = bill_content.words
-    bill_words_stemmed = [wordlist.stem() for wordlist in bill_words]
+    bill_words_stemmed = [word.stem() for word in bill_words if word.isalpha()]
     return bill_words_stemmed
