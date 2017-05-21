@@ -8,15 +8,21 @@ from sklearn.decomposition import NMF
 import cPickle as pickle
 from datetime import datetime
 from multiprocessing import Pool, cpu_count
+import sql_queries
 
 class DataPrep(object):
     """An object to clean and wrangle data into format for a model"""
 
     def __init__(self, query=None, filepath=None, training=True, predict=False, amendment_model=False):
-        """Reads in data
+        """Reads in data, either from csv, a specific SQL query, or takes a series of pre-defined steps to
+        get data for the introduction model (by default) or the amendment model.
 
         Args:
-            filepath (str): location of file with csv data
+            query (str): SQL query to execute to get data (optional, currently not used)
+            filepath (str): location of file with csv data (optional)
+            training (bool): whether to use train or test mode.
+            predict (bool): whether to prepare unseen data to predict upon
+            amendment_model (bool): whether to take the steps to build features for amendment model
         """
         if training:
             if query:
@@ -30,42 +36,28 @@ class DataPrep(object):
                 print "loaded csv, {} rows".format(nrows)
             elif amendment_model:
                 self.df = self.amendment_data()
-                #self.df['content'] = [content for content in self.process_text('bill_xml', 'Content')]
+                # uncomment next life if you want to use the bill content the basis for features
+                # self.df['content'] = [content for content in self.process_text('bill_xml', 'Content')]
             else: # default queries
-                self.df = self.default_data()
+                self.df = self.intro_data()
 
-    def default_data(self):
-        bills_query = """SELECT b.bill_id, bv.bill_version_id, b.session_year, b.session_num, measure_type, bv.urgency, datediff(bv.bill_version_action_date,sd.start_date) as days_since_start, bv.appropriation, bv.vote_required, bv.taxlevy, bv.fiscal_committee, b.passed
-            FROM bill_tbl b
-            left join bill_version_tbl bv
-            on b.bill_id=bv.bill_id and bv.bill_version_id like '%INT'
-            join start_dates sd on b.session_year=sd.session_year and b.session_num=sd.session_num
-            where b.measure_type in ('AB' , 'SB') and b.session_year < '2015'"""
+    def intro_data(self):
+        """This executes all necessary queries and read all necessary files to build the master feature matrix
+        for the introduction model. Currently, these features are:
+            ['bill_id', 'bill_version_id', 'session_year', 'session_num',
+       'measure_type', 'urgency', 'days_since_start', 'appropriation',
+       'vote_required', 'taxlevy', 'fiscal_committee', 'passed', 'party',
+       'nterms', 'success_rate', 'bill_xml']
+       """
+        bills_query = sql_queries.intro_bills_query()
         bills_df = get_sql.get_df(bills_query)
 
-
-        authors_query = """SELECT
-                bv.bill_id, l.author_name, l.party, l.district, bva.session_year
-            FROM
-                bill_version_authors_tbl bva
-                    LEFT JOIN
-                legislator_tbl l ON bva.name = l.author_name
-                    AND l.session_year = bva.session_year
-                    JOIN
-                bill_version_tbl bv ON bv.bill_version_id = bva.bill_version_id
-            WHERE
-                contribution = 'LEAD_AUTHOR'
-            		AND bv.bill_id < '2015'
-                    AND bva.bill_version_id LIKE '%INT'
-                    AND (bv.bill_id LIKE '%AB%'
-                    OR bv.bill_id LIKE '%SB%')"""
+        authors_query = sql_queries.intro_authors_query()
         authors_df = get_sql.get_df(authors_query)
         authors_df = self.add_success_rate(authors_df)
         authors_df = self.aggregate_authors_df(authors_df)
 
-        earliest_version_query = """select bv.bill_id, bv.bill_xml from bill_version_tbl bv
-            where bv.bill_version_id like '%INT'
-            """
+        earliest_version_query = sql_queries.intro_earliest_version_query()
         text_df = get_sql.get_df(earliest_version_query)
 
         bill_authors_merged_df = pd.merge(bills_df, authors_df, on='bill_id')
@@ -179,7 +171,7 @@ class DataPrep(object):
             group by  bva.name, bva.session_year
             order by bva.name, bva.session_year"""
         success_rate = get_sql.get_df(success_rate_query)
-        import ipdb; ipdb.set_trace()
+
         # success_rate_cum = success_rate.groupby(['author_name', 'session_year']).sum().groupby(level=[0]).cumsum().reset_index()
         # success_rate_cum['success_rate'] = success_rate_cum['n_passed'] / success_rate_cum['n_introduced']
         # success_rate_cum['w_success_rate'] = success_rate_cum['success_rate'] * success_rate_cum['n_introduced']
@@ -238,7 +230,7 @@ class DataPrep(object):
 
     def aggregate_authors_df(self, authors_df):
         all_seniority = self.make_seniority_data()
-        import ipdb; ipdb.set_trace()
+
         authors_df['party'] = authors_df['party'].fillna('COM')
         authors_party_seniority_df = pd.merge(authors_df, all_seniority, on=['district', 'session_year'], how='left')
 
@@ -411,7 +403,7 @@ class DataPrep(object):
             self.df.to_csv(filename, index=False, encoding='utf-8')
 
         # todrop = [u'bill_id', u'session_year', u'session_num', u'measure_type', u'fiscal_committee', u'bill_version_id', u'bill_xml']
-        import ipdb; ipdb.set_trace()
+
         todrop = [u'bill_xml']
         self.drop_some_cols(todrop)
 
@@ -443,7 +435,7 @@ class DataPrep(object):
 
     def prepare_amendment_model(self, n_components=None, save=False, regression=False):
         """Executes all preparation for input into amendment model"""
-        import ipdb; ipdb.set_trace()
+
 
         if n_components:
             self.add_latent_topics(n_components,  use_cached_tfidf='../data/cached_tfidf_05-19-17-20-07.pkl')
