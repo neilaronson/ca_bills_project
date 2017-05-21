@@ -7,6 +7,7 @@ from textblob import TextBlob
 from sklearn.decomposition import NMF
 import cPickle as pickle
 from datetime import datetime
+from multiprocessing import Pool, cpu_count
 
 class DataPrep(object):
     """An object to clean and wrangle data into format for a model"""
@@ -21,7 +22,7 @@ class DataPrep(object):
             if query:
                 self.df = get_sql.get_df(query)
             elif filepath:
-                reader = pd.read_csv(filepath, chunksize=1000)
+                reader = pd.read_csv(filepath, chunksize=1000, encoding='utf-8')
                 self.df = pd.DataFrame()
                 chunks = [chunk for chunk in reader]
                 self.df = pd.concat(chunks)
@@ -29,7 +30,7 @@ class DataPrep(object):
                 print "loaded csv, {} rows".format(nrows)
             elif amendment_model:
                 self.df = self.amendment_data()
-                self.df['content'] = [content for content in self.process_text('bill_xml', 'Content')]
+                #self.df['content'] = [content for content in self.process_text('bill_xml', 'Content')]
             else: # default queries
                 self.df = self.default_data()
 
@@ -59,6 +60,7 @@ class DataPrep(object):
                     AND (bv.bill_id LIKE '%AB%'
                     OR bv.bill_id LIKE '%SB%')"""
         authors_df = get_sql.get_df(authors_query)
+        authors_df = self.add_success_rate(authors_df)
         authors_df = self.aggregate_authors_df(authors_df)
 
         earliest_version_query = """select bv.bill_id, bv.bill_xml from bill_version_tbl bv
@@ -101,19 +103,24 @@ class DataPrep(object):
             left join bill_summary_vote_tbl bsv on bv.bill_id=bsv.bill_id and bv.bill_version_action_date > bsv.vote_date_time
             where bv.bill_version_id  < '2015' and bv.bill_version_id like '%AMD' and (bv.bill_id like '%AB%' or bv.bill_id like '%SB%')"""
         prev_com = get_sql.get_df(previous_committees_query)
-        import ipdb; ipdb.set_trace()
-        prev_com_pivot = prev_com.pivot_table(index='bvid2', values='bill_version_id', columns='SCID', aggfunc='count', fill_value=0).reset_index()
-        merged_df = pd.merge(merged_df, prev_com_pivot, left_on='bill_version_id', right_on='bvid2', how='left')
-        columns_to_fill = [u'A0',
-           u'A1', u'A10', u'A11', u'A12', u'A13', u'A14', u'A15', u'A16', u'A17',
-           u'A18', u'A19', u'A2', u'A20', u'A21', u'A22', u'A24', u'A25', u'A26',
-           u'A27', u'A28', u'A29', u'A3', u'A30', u'A31', u'A4', u'A5', u'A6',
-           u'A7', u'A8', u'A9', u'AE', u'S0', u'S1', u'S10', u'S11', u'S12',
-           u'S13', u'S14', u'S15', u'S16', u'S17', u'S18', u'S19', u'S2', u'S20',
-           u'S21', u'S22', u'S3', u'S4', u'S5', u'S6', u'S7', u'S8', u'S9']
-        merged_df = merged_df.drop('bvid2', axis=1)
 
-        merged_df[columns_to_fill] = merged_df[columns_to_fill].fillna(value=0)
+        # prev_com_pivot = prev_com.pivot_table(index='bvid2', values='bill_version_id', columns='SCID', aggfunc='count', fill_value=0).reset_index()
+        # merged_df = pd.merge(merged_df, prev_com_pivot, left_on='bill_version_id', right_on='bvid2', how='left')
+        # columns_to_fill = [u'A0',
+        #    u'A1', u'A10', u'A11', u'A12', u'A13', u'A14', u'A15', u'A16', u'A17',
+        #    u'A18', u'A19', u'A2', u'A20', u'A21', u'A22', u'A24', u'A25', u'A26',
+        #    u'A27', u'A28', u'A29', u'A3', u'A30', u'A31', u'A4', u'A5', u'A6',
+        #    u'A7', u'A8', u'A9', u'AE', u'S0', u'S1', u'S10', u'S11', u'S12',
+        #    u'S13', u'S14', u'S15', u'S16', u'S17', u'S18', u'S19', u'S2', u'S20',
+        #    u'S21', u'S22', u'S3', u'S4', u'S5', u'S6', u'S7', u'S8', u'S9']
+        # merged_df = merged_df.drop('bvid2', axis=1)
+        #
+        # merged_df[columns_to_fill] = merged_df[columns_to_fill].fillna(value=0)
+        prev_com_count = prev_com.groupby('bill_version_id').count().reset_index()[['bill_version_id', 'SCID']]
+        prev_com_count = prev_com_count.rename(columns={'SCID': 'n_prev_votes'})
+        merged_df = pd.merge(merged_df, prev_com_count, on='bill_version_id', how='left')
+        merged_df['n_prev_votes'] = merged_df['n_prev_votes'].fillna(value=0)
+
 
         return merged_df
 
@@ -138,10 +145,52 @@ class DataPrep(object):
         authors_amendment_df['party'] = authors_amendment_df['party'].fillna('COM')
         authors_amendment_seniority_df = self.add_seniority(authors_amendment_df)
 
+        authors_amendment_seniority_df = self.add_success_rate_amd(authors_amendment_seniority_df)
+
         authors_amendment_seniority_df = authors_amendment_seniority_df.drop(['bill_id', 'session_year', 'district', 'author_name', 'legislator_name', 'name'], axis=1)
-        authors_amendment_seniority_df = authors_amendment_seniority_df.groupby('bill_version_id').agg({'party': agg_parties, 'nterms': 'mean'}).reset_index()
+        authors_amendment_seniority_df = authors_amendment_seniority_df.groupby('bill_version_id').agg({'party': agg_parties, 'nterms': 'mean', 'success_rate': 'mean'}).reset_index()
         authors_amendment_seniority_df.nterms[authors_amendment_seniority_df['nterms'].isnull()] = -1000
+        authors_amendment_seniority_df.success_rate[authors_amendment_seniority_df['success_rate'].isnull()] = -1000
+
+
+
         return pd.merge(df, authors_amendment_seniority_df, on='bill_version_id')
+
+    def add_success_rate_amd(self, df):
+        success_rate_query = """select name as author_name, session_year, count(passed) as n_amended, sum(passed) as n_passed from (SELECT bva.name, bva.session_year, bva.bill_id, b.passed FROM capublic.bill_version_authors_tbl bva
+            join bill_tbl b on b.bill_id=bva.bill_id
+            where bill_version_id like '%AMD' and (b.bill_id like '%SB%' or b.bill_id like '%AB%')
+            group by bva.name, bva.session_year, bva.bill_id
+            order by name) t
+            group by name, session_year"""
+        success_rate = get_sql.get_df(success_rate_query)
+        success_rate['success_rate'] = success_rate['n_passed'] / success_rate['n_amended']
+        success_rate['session_year'] = success_rate['session_year'].apply(make_next_session_year)
+        merged_df = pd.merge(df, success_rate, on=['author_name', 'session_year'], how='left')
+        return merged_df
+
+
+    def add_success_rate(self, df):
+        success_rate_query = """SELECT  bva.name as author_name, bva.session_year, sum(b.passed) as n_passed, count(b.passed) as n_introduced
+            FROM capublic.bill_version_authors_tbl bva
+            join legislator_tbl l on bva.name=l.author_name and bva.session_year=l.session_year
+            join bill_tbl b on b.bill_id=bva.bill_id
+            where bill_version_id like '%INT' and b.measure_type in ('SB', 'AB') and bva.contribution='LEAD_AUTHOR' and bva.session_year < '20152016'
+            group by  bva.name, bva.session_year
+            order by bva.name, bva.session_year"""
+        success_rate = get_sql.get_df(success_rate_query)
+        import ipdb; ipdb.set_trace()
+        # success_rate_cum = success_rate.groupby(['author_name', 'session_year']).sum().groupby(level=[0]).cumsum().reset_index()
+        # success_rate_cum['success_rate'] = success_rate_cum['n_passed'] / success_rate_cum['n_introduced']
+        # success_rate_cum['w_success_rate'] = success_rate_cum['success_rate'] * success_rate_cum['n_introduced']
+        success_rate['success_rate'] = success_rate['n_passed'] / success_rate['n_introduced']
+
+        # success_rate_cum['session_year'] = success_rate_cum['session_year'].apply(make_next_session_year)
+        success_rate['session_year'] = success_rate['session_year'].apply(make_next_session_year)
+        merged_df = pd.merge(df, success_rate, on=['author_name', 'session_year'], how='left')
+
+        return merged_df
+
 
     def add_seniority(self, df):
 
@@ -189,14 +238,15 @@ class DataPrep(object):
 
     def aggregate_authors_df(self, authors_df):
         all_seniority = self.make_seniority_data()
-
+        import ipdb; ipdb.set_trace()
         authors_df['party'] = authors_df['party'].fillna('COM')
         authors_party_seniority_df = pd.merge(authors_df, all_seniority, on=['district', 'session_year'], how='left')
 
-        grouped_party_seniority = authors_party_seniority_df[['bill_id', 'party', 'nterms']].groupby('bill_id')
-        grouped_party_seniority = grouped_party_seniority.agg({'party': agg_parties, 'nterms': 'mean'}).reset_index()
+        grouped_party_seniority = authors_party_seniority_df[['bill_id', 'party', 'nterms', 'success_rate']].groupby('bill_id')
+        grouped_party_seniority = grouped_party_seniority.agg({'party': agg_parties, 'nterms': 'mean', 'success_rate': 'mean'}).reset_index()
 
         grouped_party_seniority.nterms[grouped_party_seniority['nterms'].isnull()] = -1000
+        grouped_party_seniority.success_rate[grouped_party_seniority['success_rate'].isnull()] = -1000
 
         # cosponsor_count_df = authors_df[['bill_id', 'party']].groupby('bill_id').count()
         # cosponsor_count_df = cosponsor_count_df.rename(columns={'party': 'n_authors'})
@@ -353,14 +403,17 @@ class DataPrep(object):
         # if use_text:
         #     self.add_latent_topics(n_components,  use_cached_processing, use_cached_tfidf, cache_processing, cache_tfidf, **tfidfargs)
 
-        # todrop = [u'bill_id', u'session_year', u'session_num', u'measure_type', u'fiscal_committee', u'bill_version_id', u'bill_xml']
-        todrop = [u'bill_xml']
-        self.drop_some_cols(todrop)
+
 
         if save:
             current_time = datetime.now().strftime(format='%m-%d-%y-%H-%M')
-            filename = "../data/intro_data_" + current_time + ".csv"
+            filename = "/home/ubuntu/extra/data/intro_data_" + current_time + ".csv"
             self.df.to_csv(filename, index=False, encoding='utf-8')
+
+        # todrop = [u'bill_id', u'session_year', u'session_num', u'measure_type', u'fiscal_committee', u'bill_version_id', u'bill_xml']
+        import ipdb; ipdb.set_trace()
+        todrop = [u'bill_xml']
+        self.drop_some_cols(todrop)
 
         y = self.df.pop('passed').values
         print "Using these features: {}".format(", ".join([str(col) for col in self.df.columns]))
@@ -369,9 +422,9 @@ class DataPrep(object):
         return X, y
 
     def subset(self, features, return_df=False):
-        import ipdb; ipdb.set_trace()
         features.append('passed')
         self.df = self.df[features]
+        print "Using these features: {}".format(", ".join(self.df.columns))
         if return_df:
             return self.df
         y = self.df.pop('passed').values
@@ -381,9 +434,17 @@ class DataPrep(object):
     def bucket_n_amendments(self, cutoff):
         self.df.n_prev_versions = self.df.n_prev_versions.apply(lambda n: 0 if n < cutoff else 1)
 
+    def check_for_stems(self, stems_filepath):
+        stems = pd.read_csv(stems_filepath, encoding='utf-8', names=['stems'])['stems'].values.tolist()
+        stems = "|".join(stems)
+        self.df['stemmed_text'] = applyParallel(self.df['content'].values, tokenize_join)
+        self.df['n_bad_stems'] = self.df['stemmed_text'].str.count(stems)
+        self.drop_some_cols(['stemmed_text'])
+
     def prepare_amendment_model(self, n_components=None, save=False, regression=False):
         """Executes all preparation for input into amendment model"""
         import ipdb; ipdb.set_trace()
+
         if n_components:
             self.add_latent_topics(n_components,  use_cached_tfidf='../data/cached_tfidf_05-19-17-20-07.pkl')
 
@@ -395,19 +456,40 @@ class DataPrep(object):
             self.dummify(['party', 'urgency', 'appropriation', 'taxlevy', 'fiscal_committee'])
         self.bucket_vote_required()
 
+        #self.check_for_stems('/home/ubuntu/extra/data/bad_stems.csv')
+
 
         if save:
             current_time = datetime.now().strftime(format='%m-%d-%y-%H-%M')
-            filename = "../data/amendment_data_" + current_time + ".csv"
+            filename = "/home/ubuntu/extra/data/amendment_data_" + current_time + ".csv"
             self.df.to_csv(filename, index=False, encoding='utf-8')
 
-        todrop = [u'session_year', u'session_num', u'measure_type', u'fiscal_committee', u'bill_version_id', u'bill_xml']
+        todrop = [u'session_year', u'session_num', u'measure_type', u'bill_version_id', 'days_since_start', 'vote_required', 'n_prev_versions', 'nterms', 'session_type',
+        'urgency_No', 'urgency_Yes', 'appropriation_No', 'appropriation_Yes', 'taxlevy_No', 'taxlevy_Yes', 'fiscal_committee_No', 'fiscal_committee_Yes', 'bill_xml', 'content']
         # ['days_since_start', 'vote_required', 'n_prev_versions', 'nterms', 'session_type', 'urgency_No', 'urgency_Yes', 'taxlevy_No', 'taxlevy_Yes',  'appropriation_Yes']
         self.drop_some_cols(todrop)
 
         print "Using these features: {}".format(", ".join([str(col) for col in self.df.columns]))
 
         return self.df
+
+def make_next_session_year(sy):
+    session_year_start = int(sy[:4]) + 2
+    session_year_end = int(sy[4:]) + 2
+    return str(session_year_start) + str(session_year_end)
+
+
+
+def applyParallel(x, func):
+    print "beginning multiprocessing"
+    pool = Pool(processes=cpu_count())
+    results = pool.map(func, x)
+    pool.close()
+
+    return pd.Series(results)
+
+def tokenize_join(text):
+    return " ".join(tokenize(text))
 
 
 def agg_parties(list_of_parties):
