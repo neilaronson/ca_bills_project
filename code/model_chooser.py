@@ -4,10 +4,12 @@ from sklearn.model_selection import KFold, cross_val_score, GridSearchCV
 from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier, AdaBoostClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.tree import DecisionTreeClassifier
-from sklearn.metrics import f1_score
+from sklearn.metrics import f1_score, accuracy_score, recall_score, precision_score
 from datetime import datetime
 from bill_kfold import bill_kfold
 import re
+from sklearn.decomposition import NMF
+import cPickle as pickle
 
 class ModelChooser(object):
     """This ModelChooser object takes in cleaned data and provides methods necessary to train and predict
@@ -20,7 +22,7 @@ class ModelChooser(object):
         self.list_of_models = list_of_models
         self.trained_models = []
 
-    def print_cv_results(self, X_data, y_data):
+    def print_results(self):
         """Prints out the cross-validated estimate of test error for f1, recall and precision"""
         for i, model in enumerate(self.list_of_models):
             print "Model: ", model
@@ -71,22 +73,17 @@ class ModelChooser(object):
     def score(self, x_test, y_test):
         """This score function is meant to be used only for test data. One best hyperparameters
         are chosen through CV, use this method to get actual test error"""
-        scores = []
+        self.f1_scores = []
+        self.recall_scores = []
+        self.precision_scores = []
+        self.accuracy_scores = []
         for model in self.list_of_models:
             predictions = model.predict(x_test)
-            scores.append(f1_score(y_test, predictions))
-        return scores
-
-
-
-def main():
-    #try_latent_topics_intro_model(3,3)
-    # test_amendment_model()
-    # test_intro_model()
-    # grid_search_intro_model()
-    # test_latent_topics_amd_model(10, 11)
-    # grid_search_amd_model()
-    score_intro_model()
+            self.f1_scores.append(f1_score(y_test, predictions))
+            self.recall_scores.append(recall_score(y_test, predictions))
+            self.precision_scores.append(precision_score(y_test, predictions))
+            self.accuracy_scores.append(accuracy_score(y_test, predictions))
+        self.print_results()
 
 def grid_search_intro_model():
     prep = DataPrep(filepath='../data/intro_data_05-19-17-21-41.csv')
@@ -125,7 +122,7 @@ def test_intro_model():
 
     mc = ModelChooser([baseline, ada])
     mc.fit_predict(X_train, y_train)
-    mc.print_cv_results(X_train, y_train)
+    mc.print_results(X_train, y_train)
 
 
 def test_latent_topics_amd_model(min_n, max_n):
@@ -154,7 +151,7 @@ def test_latent_topics_amd_model(min_n, max_n):
 
         mc = ModelChooser([rf, gb])
         mc.fit_predict(X_train, y_train)
-        mc.print_cv_results(X_train, y_train)
+        mc.print_results(X_train, y_train)
 
         for i, score in enumerate(mc.f1_scores):
             if score > highest_f1:
@@ -204,7 +201,7 @@ def test_amendment_model():
 
 
     mc.fit_predict(X_train, y_train, custom_kfold=bkf)
-    mc.print_cv_results(X_train, y_train)
+    mc.print_results(X_train, y_train)
 
 def grid_search_amd_model():
     prep = DataPrep(filepath="/home/ubuntu/extra/data/amendment_data_05-21-17-20-05.csv")
@@ -247,7 +244,7 @@ def try_latent_topics_intro_model(min_n, max_n):
 
         mc = ModelChooser([rf, gb])
         mc.fit_predict(X_train, y_train)
-        mc.print_cv_results(X_train, y_train)
+        mc.print_results(X_train, y_train)
 
         for i, score in enumerate(mc.f1_scores):
             if score > highest_f1:
@@ -278,16 +275,49 @@ def score_intro_model():
 
     dp = DataPrep(training=False)
     dp.prepare()
-    features = [u'days_since_start', u'session_type', u'party_ALL_DEM', u'party_ALL_REP',
-       u'party_BOTH', u'party_COM', u'urgency_No', u'urgency_Yes',
-       u'taxlevy_No', u'taxlevy_Yes']
     X_test, y_test = dp.subset(features)
 
 
-    score = mc.score(X_test, y_test)
-    print "Test set scores: \n"
-    print "F1: {}".format(score)
+    mc.score(X_test, y_test)
 
+def save_model(model):
+    p = re.compile(r"(.*)\(.*")
+    model_name = re.match(p, str(model)).group(1)
+    current_time = datetime.now().strftime(format='%m-%d-%y-%H-%M')
+    filename = "/home/ubuntu/ca_bills_project/data/extra/"+model_name+current_time+".pkl"
+    with open(filename, 'w') as p:
+        pickle.dump(model, p)
+
+def score_amd_model():
+    prep = DataPrep(filepath="/home/ubuntu/extra/data/amendment_data_05-21-17-20-05.csv")
+    features = ['success_rate', 'party_ALL_DEM', 'party_ALL_REP', 'party_BOTH', 'party_COM', 'session_type', 'days_since_start', 'n_prev_versions',
+                'n_prev_votes', 'taxlevy_No', 'taxlevy_Yes', 'urgency_No', 'urgency_Yes']
+    X_train, y_train = prep.subset(features)
+
+    baseline = DummyClassifier(strategy='most_frequent')
+    rf = RandomForestClassifier(max_features=0.8, n_estimators=100000, max_depth=5, n_jobs=-1, verbose=3)
+
+    mc = ModelChooser([baseline, rf])
+    mc.train(X_train, y_train)
+
+    save_model(rf)
+
+    dp = DataPrep(training=False, amendment_model=True)
+    dp.prepare_amendment_model()
+    X_test, y_test = dp.subset(features)
+
+    mc.score(X_test, y_test)
+
+
+def main():
+    #try_latent_topics_intro_model(3,3)
+    # test_amendment_model()
+    # test_intro_model()
+    # grid_search_intro_model()
+    # test_latent_topics_amd_model(10, 11)
+    # grid_search_amd_model()
+    score_intro_model()
+    score_amd_model()
 
 if __name__ == '__main__':
     main()
