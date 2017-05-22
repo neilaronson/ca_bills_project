@@ -42,7 +42,7 @@ class DataPrep(object):
                 self.df = self.intro_data()
         else: #test mode
             if amendment_model:
-                pass
+                self.df = self.amendment_data(test=True)
             else:
                 self.df = self.intro_data(test=True)
 
@@ -71,7 +71,7 @@ class DataPrep(object):
 
         return bill_authors_text_df
 
-    def amendment_data(self):
+    def amendment_data(self, test=True):
         """This executes all necessary queries and read all necessary files to build the master feature matrix
         for the amendment model. Currently, these features are:
             ['bill_version_id', 'bill_xml', 'bill_id', 'session_year',
@@ -80,7 +80,10 @@ class DataPrep(object):
        'passed', 'n_prev_versions', 'party', 'nterms', 'success_rate',
        'n_prev_votes']
        """
-        bills_query = sql_queries.amd_bills_query()
+        if test:
+            bills_query = sql_queries.amd_bills_query_test()
+        else:
+            bills_query = sql_queries.amd_bills_query()
         bills_df = get_sql.get_df(bills_query)
 
         n_amendments_query = sql_queries.amd_n_amendments_query()
@@ -248,7 +251,7 @@ class DataPrep(object):
         if (before-after) > 0:
             self.df = self.df.reset_index()
             self.df = self.df.drop('index', axis=1)
-        print "dropped {} rows".format(before-after)
+            print "dropped {} rows".format(before-after)
 
 
     def bucket_vote_required(self):
@@ -392,7 +395,8 @@ class DataPrep(object):
     def subset(self, features, return_df=False):
         """Allows the user to specify which features from the feature matrix will be used.
         Features must already be processed (ie in numeric format)"""
-        features.append('passed')
+        if 'passed' not in features:
+            features.append('passed')
         self.df = self.df[features]
         print "Using these features: {}".format(", ".join(self.df.columns))
         if return_df:
@@ -427,22 +431,21 @@ class DataPrep(object):
             self.dummify(['party', 'urgency', 'appropriation', 'taxlevy', 'fiscal_committee'])
         self.bucket_vote_required()
 
-        #self.check_for_stems('/home/ubuntu/extra/data/bad_stems.csv')
-
-
         if save:
             current_time = datetime.now().strftime(format='%m-%d-%y-%H-%M')
             filename = "/home/ubuntu/extra/data/amendment_data_" + current_time + ".csv"
             self.df.to_csv(filename, index=False, encoding='utf-8')
 
-        todrop = [u'session_year', u'session_num', u'measure_type', u'bill_version_id', 'days_since_start', 'vote_required', 'n_prev_versions', 'nterms', 'session_type',
-        'urgency_No', 'urgency_Yes', 'appropriation_No', 'appropriation_Yes', 'taxlevy_No', 'taxlevy_Yes', 'fiscal_committee_No', 'fiscal_committee_Yes', 'bill_xml', 'content']
+        # todrop = [u'session_year', u'session_num', u'measure_type', u'bill_version_id', 'days_since_start', 'vote_required', 'n_prev_versions', 'nterms', 'session_type',
+        # 'urgency_No', 'urgency_Yes', 'appropriation_No', 'appropriation_Yes', 'taxlevy_No', 'taxlevy_Yes', 'fiscal_committee_No', 'fiscal_committee_Yes', 'bill_xml', 'content']
         # ['days_since_start', 'vote_required', 'n_prev_versions', 'nterms', 'session_type', 'urgency_No', 'urgency_Yes', 'taxlevy_No', 'taxlevy_Yes',  'appropriation_Yes']
-        self.drop_some_cols(todrop)
+        if 'bill_xml' in self.df.columns:
+            todrop = [u'bill_xml']
+            self.drop_some_cols(todrop)
 
-        print "Using these features: {}".format(", ".join([str(col) for col in self.df.columns]))
-
-        return self.df
+        # print "Using these features: {}".format(", ".join([str(col) for col in self.df.columns]))
+        #
+        # return self.df
 
 def make_next_session_year(sy):
     """Change the session year to be the next session year. This is done so that when joining
