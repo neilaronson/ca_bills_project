@@ -40,8 +40,13 @@ class DataPrep(object):
                 # self.df['content'] = [content for content in self.process_text('bill_xml', 'Content')]
             else: # default queries
                 self.df = self.intro_data()
+        else: #test mode
+            if amendment_model:
+                pass
+            else:
+                self.df = self.intro_data(test=True)
 
-    def intro_data(self):
+    def intro_data(self, test=False):
         """This executes all necessary queries and read all necessary files to build the master feature matrix
         for the introduction model. Currently, these features are:
             ['bill_id', 'bill_version_id', 'session_year', 'session_num',
@@ -49,104 +54,73 @@ class DataPrep(object):
        'vote_required', 'taxlevy', 'fiscal_committee', 'passed', 'party',
        'nterms', 'success_rate', 'bill_xml']
        """
-        bills_query = sql_queries.intro_bills_query()
+
+        if test:
+            bills_query = sql_queries.intro_bills_query_test()
+        else:
+            bills_query = sql_queries.intro_bills_query()
         bills_df = get_sql.get_df(bills_query)
 
-        authors_query = sql_queries.intro_authors_query()
-        authors_df = get_sql.get_df(authors_query)
-        authors_df = self.add_success_rate(authors_df)
-        authors_df = self.aggregate_authors_df(authors_df)
+        bill_authors_merged_df = self.add_authors(bills_df, "intro")
 
         earliest_version_query = sql_queries.intro_earliest_version_query()
         text_df = get_sql.get_df(earliest_version_query)
 
-        bill_authors_merged_df = pd.merge(bills_df, authors_df, on='bill_id')
+        # bill_authors_merged_df = pd.merge(bills_df, authors_df, on='bill_id')
         bill_authors_text_df = pd.merge(bill_authors_merged_df, text_df, on='bill_id')
 
         return bill_authors_text_df
 
     def amendment_data(self):
-        bills_query = """SELECT b.bill_id, bv.bill_version_id, b.session_year, b.session_num, measure_type, bv.urgency, datediff(bv.bill_version_action_date,sd.start_date) as days_since_start, bv.appropriation, bv.vote_required, bv.taxlevy, bv.fiscal_committee, b.passed
-            FROM bill_tbl b
-            join bill_version_tbl bv
-            on b.bill_id=bv.bill_id and bv.bill_version_id like '%AMD'
-            join start_dates sd on b.session_year=sd.session_year and b.session_num=sd.session_num
-            where b.measure_type in ('AB' , 'SB') and b.session_year < '2015'"""
+        """This executes all necessary queries and read all necessary files to build the master feature matrix
+        for the amendment model. Currently, these features are:
+            ['bill_version_id', 'bill_xml', 'bill_id', 'session_year',
+       'session_num', 'measure_type', 'urgency', 'days_since_start',
+       'appropriation', 'vote_required', 'taxlevy', 'fiscal_committee',
+       'passed', 'n_prev_versions', 'party', 'nterms', 'success_rate',
+       'n_prev_votes']
+       """
+        bills_query = sql_queries.amd_bills_query()
         bills_df = get_sql.get_df(bills_query)
 
-        n_amendments_query = """select bv1.bill_version_id, bv1.bill_id, count(bv2.bill_version_id) as n_prev_versions from bill_version_tbl bv1
-            join bill_version_tbl bv2 on bv1.bill_id=bv2.bill_id
-            where bv1.bill_version_id like '%AMD' and bv2.version_num > bv1.version_num
-            group by bv1.bill_version_id"""
+        n_amendments_query = sql_queries.amd_n_amendments_query()
         n_amendments_df = get_sql.get_df(n_amendments_query)
 
         merged_df = pd.merge(bills_df, n_amendments_df, on='bill_version_id')
         merged_df = merged_df.drop('bill_id_y', axis=1)
         merged_df = merged_df.rename(columns={'bill_id_x': 'bill_id'})
-        merged_df = self.add_authors(merged_df)
+        merged_df = self.add_authors(merged_df, "amendment")
 
-        text_query = """select bv.bill_version_id, bv.bill_xml from bill_version_tbl bv
-            where bv.bill_version_id like '%AMD'"""
+        text_query = sql_queries.amd_text_query()
         text_df = get_sql.get_df(text_query)
         merged_df = pd.merge(text_df, merged_df, on='bill_version_id')
 
-        previous_committees_query = """SELECT bv.bill_version_id, bv.bill_version_id as bvid2, bsv.SCID
-            from bill_version_tbl bv
-            left join bill_summary_vote_tbl bsv on bv.bill_id=bsv.bill_id and bv.bill_version_action_date > bsv.vote_date_time
-            where bv.bill_version_id  < '2015' and bv.bill_version_id like '%AMD' and (bv.bill_id like '%AB%' or bv.bill_id like '%SB%')"""
+        previous_committees_query = sql_queries.amd_prev_com_query()
         prev_com = get_sql.get_df(previous_committees_query)
 
-        # prev_com_pivot = prev_com.pivot_table(index='bvid2', values='bill_version_id', columns='SCID', aggfunc='count', fill_value=0).reset_index()
-        # merged_df = pd.merge(merged_df, prev_com_pivot, left_on='bill_version_id', right_on='bvid2', how='left')
-        # columns_to_fill = [u'A0',
-        #    u'A1', u'A10', u'A11', u'A12', u'A13', u'A14', u'A15', u'A16', u'A17',
-        #    u'A18', u'A19', u'A2', u'A20', u'A21', u'A22', u'A24', u'A25', u'A26',
-        #    u'A27', u'A28', u'A29', u'A3', u'A30', u'A31', u'A4', u'A5', u'A6',
-        #    u'A7', u'A8', u'A9', u'AE', u'S0', u'S1', u'S10', u'S11', u'S12',
-        #    u'S13', u'S14', u'S15', u'S16', u'S17', u'S18', u'S19', u'S2', u'S20',
-        #    u'S21', u'S22', u'S3', u'S4', u'S5', u'S6', u'S7', u'S8', u'S9']
-        # merged_df = merged_df.drop('bvid2', axis=1)
-        #
-        # merged_df[columns_to_fill] = merged_df[columns_to_fill].fillna(value=0)
         prev_com_count = prev_com.groupby('bill_version_id').count().reset_index()[['bill_version_id', 'SCID']]
         prev_com_count = prev_com_count.rename(columns={'SCID': 'n_prev_votes'})
         merged_df = pd.merge(merged_df, prev_com_count, on='bill_version_id', how='left')
         merged_df['n_prev_votes'] = merged_df['n_prev_votes'].fillna(value=0)
 
-
         return merged_df
 
-    def add_authors(self, df):
-        authors_amendment_query = """SELECT
-                bv.bill_id, bv.bill_version_id, bva.session_year, l.author_name, l.legislator_name, l.district, l.party
-            FROM
-                bill_version_authors_tbl bva
-                    LEFT JOIN
-                legislator_tbl l ON bva.name = l.author_name
-                    AND l.session_year = bva.session_year
-                    JOIN
-                bill_version_tbl bv ON bv.bill_version_id = bva.bill_version_id
-            WHERE
-                contribution = 'LEAD_AUTHOR'
-            		AND bv.bill_id < '2015'
-                    AND bva.bill_version_id LIKE '%AMD'
-                    AND (bv.bill_id LIKE '%AB%'
-                    OR bv.bill_id LIKE '%SB%')"""
+    def add_authors(self, df, model):
+        if model == "amendment":
+            authors_query = sql_queries.amd_authors_query()
+        elif model =="intro":
+            authors_query = sql_queries.intro_authors_query()
 
-        authors_amendment_df = get_sql.get_df(authors_amendment_query)
-        authors_amendment_df['party'] = authors_amendment_df['party'].fillna('COM')
-        authors_amendment_seniority_df = self.add_seniority(authors_amendment_df)
+        authors_df = get_sql.get_df(authors_query)
+        authors_df = self.add_seniority(authors_df)
+        authors_df = self.add_success_rate_amd(authors_df)
+        authors_df = self.aggregate_authors_df(authors_df, model)
+        if model == "amendment":
+            merged_df = pd.merge(df, authors_df, on='bill_version_id')
+        elif model =="intro":
+            merged_df = pd.merge(df, authors_df, on='bill_id')
+        return merged_df
 
-        authors_amendment_seniority_df = self.add_success_rate_amd(authors_amendment_seniority_df)
-
-        authors_amendment_seniority_df = authors_amendment_seniority_df.drop(['bill_id', 'session_year', 'district', 'author_name', 'legislator_name', 'name'], axis=1)
-        authors_amendment_seniority_df = authors_amendment_seniority_df.groupby('bill_version_id').agg({'party': agg_parties, 'nterms': 'mean', 'success_rate': 'mean'}).reset_index()
-        authors_amendment_seniority_df.nterms[authors_amendment_seniority_df['nterms'].isnull()] = -1000
-        authors_amendment_seniority_df.success_rate[authors_amendment_seniority_df['success_rate'].isnull()] = -1000
-
-
-
-        return pd.merge(df, authors_amendment_seniority_df, on='bill_version_id')
 
     def add_success_rate_amd(self, df):
         success_rate_query = """select name as author_name, session_year, count(passed) as n_amended, sum(passed) as n_passed from (SELECT bva.name, bva.session_year, bva.bill_id, b.passed FROM capublic.bill_version_authors_tbl bva
@@ -228,23 +202,27 @@ class DataPrep(object):
         return final_seniority
 
 
-    def aggregate_authors_df(self, authors_df):
-        all_seniority = self.make_seniority_data()
+    def aggregate_authors_df(self, authors_df, model):
+        if model == "intro":
+            # all_seniority = self.make_seniority_data()
 
-        authors_df['party'] = authors_df['party'].fillna('COM')
-        authors_party_seniority_df = pd.merge(authors_df, all_seniority, on=['district', 'session_year'], how='left')
+            authors_df['party'] = authors_df['party'].fillna('COM')
+            # authors_party_seniority_df = pd.merge(authors_df, all_seniority, on=['district', 'session_year'], how='left')
 
-        grouped_party_seniority = authors_party_seniority_df[['bill_id', 'party', 'nterms', 'success_rate']].groupby('bill_id')
-        grouped_party_seniority = grouped_party_seniority.agg({'party': agg_parties, 'nterms': 'mean', 'success_rate': 'mean'}).reset_index()
+            grouped_party_seniority = authors_df[['bill_id', 'party', 'nterms', 'success_rate']].groupby('bill_id')
+            grouped_party_seniority = grouped_party_seniority.agg({'party': agg_parties, 'nterms': 'mean', 'success_rate': 'mean'}).reset_index()
 
-        grouped_party_seniority.nterms[grouped_party_seniority['nterms'].isnull()] = -1000
-        grouped_party_seniority.success_rate[grouped_party_seniority['success_rate'].isnull()] = -1000
+            grouped_party_seniority.nterms[grouped_party_seniority['nterms'].isnull()] = -1000
+            grouped_party_seniority.success_rate[grouped_party_seniority['success_rate'].isnull()] = -1000
 
-        # cosponsor_count_df = authors_df[['bill_id', 'party']].groupby('bill_id').count()
-        # cosponsor_count_df = cosponsor_count_df.rename(columns={'party': 'n_authors'})
-        # cosponsor_count_df['committee'] = (cosponsor_count_df['n_authors']==0).astype(int)
-        # merged_df = pd.merge(party_df, cosponsor_count_df, left_index=True, right_index=True).reset_index()
-        return grouped_party_seniority
+            return grouped_party_seniority
+        else:
+            authors_df['party'] = authors_df['party'].fillna('COM')
+            authors_df = authors_df.drop(['bill_id', 'session_year', 'district', 'author_name', 'legislator_name', 'name'], axis=1)
+            authors_df = authors_df.groupby('bill_version_id').agg({'party': agg_parties, 'nterms': 'mean', 'success_rate': 'mean'}).reset_index()
+            authors_df.nterms = authors_df.nterms.fillna(-1000)
+            authors_df.success_rate = authors_df.success_rate.fillna(-1000)
+            return authors_df
 
     def dummify(self, columns, regression=False):
         """Create dummy columns for categorical variables"""
@@ -272,15 +250,6 @@ class DataPrep(object):
             self.df = self.df.drop('index', axis=1)
         print "dropped {} rows".format(before-after)
 
-    def drop_na_by_col(self, columns):
-        before = self.df.shape[0]
-        self.df = self.df.dropna(axis=columns, how='any')
-        after = self.df.shape[0]
-        if (before-after) > 0:
-            self.df = self.df.reset_index()
-            self.df = self.df.drop('index', axis=1)
-        print "dropped {} rows".format(before-after)
-
 
     def bucket_vote_required(self):
         """Separate all bills that require a simple majority from other types of bills that require more than
@@ -293,6 +262,7 @@ class DataPrep(object):
         self.df['session_type'] = self.df['session_num'].apply(lambda session: 0 if session=='0' else 1)
 
     def make_corpus(self, X_data):
+        """Creates corpus lazily for tfidf and shows progress report for every 100 documents"""
         for i, bill in enumerate(X_data):
             if i % 100 == 0:
                 print "on document {} of {}".format(i, len(X_data))
@@ -320,6 +290,7 @@ class DataPrep(object):
         return tfidf_mat
 
     def get_nmf_mat(self, X_data, n_components):
+        """Returns sklearn's W matrix from NMF with the given number of latent topics"""
         nmf = NMF(n_components=n_components)
         W = nmf.fit_transform(X_data)
         return W
@@ -353,6 +324,8 @@ class DataPrep(object):
         return text
 
     def process_and_tfidf(self, use_cached_processing=None, use_cached_tfidf=None, cache_processing=False, cache_tfidf=False, identifier=None, **tfidfargs):
+        """Processes text through BeautifulSoup (if necessary) to extract an XML field and then runs tfidf
+        on all bill's text"""
         if cache_tfidf and not use_cached_processing:  #make sure to cache processing if caching tfidf
             cache_processing=True
         if not use_cached_tfidf:
@@ -367,6 +340,7 @@ class DataPrep(object):
         return tfidf_mat
 
     def add_latent_topics(self, n_components, use_cached_processing=None, use_cached_tfidf=None, cache_processing=False, cache_tfidf=False, **tfidfargs):
+        """Adds latent topics to feature matrix"""
         tfidf_mat = self.process_and_tfidf(use_cached_processing, use_cached_tfidf, cache_processing, cache_tfidf, **tfidfargs)
         ltm = self.get_nmf_mat(tfidf_mat, n_components)
         col_names = ["topic_"+str(i) for i in range(n_components)]
@@ -374,6 +348,7 @@ class DataPrep(object):
         self.df = pd.concat([self.df, ltm_df], axis=1)
 
     def random_subset(self, nrows_to_keep):
+        """Make a random sample of the dataframe stored in self.df"""
         np.random.seed(123)
         keepers = np.random.choice(range(self.df.shape[0]), size=nrows_to_keep, replace=False)
         self.df = self.df.iloc[keepers,:]
@@ -404,16 +379,19 @@ class DataPrep(object):
 
         # todrop = [u'bill_id', u'session_year', u'session_num', u'measure_type', u'fiscal_committee', u'bill_version_id', u'bill_xml']
 
-        todrop = [u'bill_xml']
-        self.drop_some_cols(todrop)
+        if 'bill_xml' in self.df.columns:
+            todrop = [u'bill_xml']
+            self.drop_some_cols(todrop)
 
-        y = self.df.pop('passed').values
-        print "Using these features: {}".format(", ".join([str(col) for col in self.df.columns]))
-        X = self.df.values
+        # y = self.df.pop('passed').values
+        # print "Using these features: {}".format(", ".join([str(col) for col in self.df.columns]))
+        # X = self.df.values
 
-        return X, y
+        # return X, y
 
     def subset(self, features, return_df=False):
+        """Allows the user to specify which features from the feature matrix will be used.
+        Features must already be processed (ie in numeric format)"""
         features.append('passed')
         self.df = self.df[features]
         print "Using these features: {}".format(", ".join(self.df.columns))
@@ -427,6 +405,7 @@ class DataPrep(object):
         self.df.n_prev_versions = self.df.n_prev_versions.apply(lambda n: 0 if n < cutoff else 1)
 
     def check_for_stems(self, stems_filepath):
+        """Checks to see whether certain stems are present in each row"""
         stems = pd.read_csv(stems_filepath, encoding='utf-8', names=['stems'])['stems'].values.tolist()
         stems = "|".join(stems)
         self.df['stemmed_text'] = applyParallel(self.df['content'].values, tokenize_join)
@@ -466,6 +445,8 @@ class DataPrep(object):
         return self.df
 
 def make_next_session_year(sy):
+    """Change the session year to be the next session year. This is done so that when joining
+    the information together about success rate, only the previous year's success rate is used."""
     session_year_start = int(sy[:4]) + 2
     session_year_end = int(sy[4:]) + 2
     return str(session_year_start) + str(session_year_end)
@@ -473,6 +454,7 @@ def make_next_session_year(sy):
 
 
 def applyParallel(x, func):
+    """Applies a function to a pandas series in parallel"""
     print "beginning multiprocessing"
     pool = Pool(processes=cpu_count())
     results = pool.map(func, x)
@@ -481,6 +463,8 @@ def applyParallel(x, func):
     return pd.Series(results)
 
 def tokenize_join(text):
+    """Join together a tokenized text into one string so that it can quickly be
+    searched with a regular expression"""
     return " ".join(tokenize(text))
 
 
