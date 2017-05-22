@@ -10,7 +10,7 @@ def get_df(query):
     return df
 
 def connect_to_db():
-    engine = sqlalchemy.create_engine("mysql+mysqldb://{}:{}@{}/capublic" \
+    engine = sqlalchemy.create_engine("mysql+mysqldb://{}:{}@{}/capublic?charset=utf8" \
         .format(os.environ["MYSQL_USER"], os.environ["MYSQL_PWD"], \
         os.environ["MYSQL_HOST"]))
     cnx = engine.raw_connection()
