@@ -76,7 +76,8 @@ def main():
     assembly_table = soup.find_all('table')[2]
     assembly_df = pandafy_table(assembly_table)
     senate_df = pandafy_table(senate_table)
-    write_to_sql(assembly_df, senate_df)
+    assembly_df.to_csv('../data/assembly.csv', encoding='utf-8')
+    senate_df.to_csv('../data/senate.csv', encoding='utf-8')
 
 if __name__ == '__main__':
     main()
