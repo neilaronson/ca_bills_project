@@ -9,6 +9,7 @@ def main():
 
 def bill_kfold(X, nfolds=3):
     """Make folds such that no bill is spread out over more one fold"""
+    results = []
     length = X.shape[0]
     unique_bill_ids = X.bill_id.unique()
     # shuffle all bills
@@ -22,7 +23,8 @@ def bill_kfold(X, nfolds=3):
     for i, fold in enumerate(folds):
         indices = [np.array(x.index) for x in folds[:i]] + [np.array(x.index) for x in folds[i+1:]]
         training_indices = np.concatenate(indices)
-        yield (training_indices, np.array(folds[i].index))
+        results.append((training_indices, np.array(folds[i].index)))
+    return results
 
 
 if __name__ == '__main__':
