@@ -1,6 +1,6 @@
 # Predicting Bill Success in the California Legislature
 
-Each year, the California Legislature considers on average about 5,400 bills, 44% of which eventually become law. These bills can affect everyday life for 39 million Californians, from the state of our roads to the minimum wage. The goal of this project is to figure out which bills are mostly likely to pass so that citizens, NGOs and other interested parties can prioritize which bills they should focus on. I also wanted to see if there were patterns in the data that could reveal insights about the legislative process.
+Each session, the California Legislature considers on average about 5,400 bills, 44% of which eventually become law. These bills can affect everyday life for 39 million Californians, from the state of our roads to the minimum wage. The goal of this project is to figure out which bills are mostly likely to pass so that citizens, NGOs and other interested parties can prioritize which bills they should focus on. I also wanted to see if there were patterns in the data that could reveal insights about the legislative process.
 
 ## Overview
 
