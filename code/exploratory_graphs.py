@@ -1,26 +1,31 @@
 import pandas as pd
 import get_sql
+# import matplotlib as mpl
+# mpl.use('Agg')
 import matplotlib.pyplot as plt
 from datetime import datetime
 import numpy as np
 from data_prep import DataPrep
+import seaborn as sns
 
-current_time = datetime.now().strftime(format='%m-%d-%y-%H-%M')
-dc = DataPrep(filepath='../data/intro_data_5_18_2.csv')
-df = dc.df
+# current_time = datetime.now().strftime(format='%m-%d-%y-%H-%M')
+# # dc = DataPrep(filepath='../data/intro_data_5_18_2.csv')
+# # dc = DataPrep(filepath="/home/ubuntu/ca_bills_project/data/extra/topic_intro_data_05-23-17-08-23.csv")
+# dc = DataPrep(filepath="../data/topic_intro_data_05-23-17-08-23.csv")
+# df = dc.df
 
 def bills_graphs():
     df['vote_required'] = df['vote_required'].apply(lambda vote: 'Majority' if vote=='Majority' else 'More than Majority')
     df['session_type'] = df['session_num'].apply(lambda session: 'Normal' if session=='0' else 'Extraordinary')
-    plot_urgency(df)
-    plot_appropriation(df)
-    plot_vote_required(df)
-    plot_taxlevy(df)
-    plot_fiscal_committee(df)
-    plot_house(df)
-    plot_session_type(df)
-    plot_days_hist(df)
-    plot_days_comparison_hist(df)
+    # plot_urgency(df)
+    # plot_appropriation(df)
+    # plot_vote_required(df)
+    # plot_taxlevy(df)
+    # plot_fiscal_committee(df)
+    # plot_house(df)
+    # plot_session_type(df)
+    # plot_days_hist(df)
+    # plot_days_comparison_hist(df)
     plot_seniority(df)
 
 def plot_seniority(df):
@@ -28,9 +33,16 @@ def plot_seniority(df):
     avg_terms_passed = no_committees[['passed', 'nterms']].groupby('passed').mean()
     no_committees['seniority_bucket'] = pd.cut(no_committees.nterms, bins=[0,1,2,3,4,5,6,21])
     bucket_pass_rates = no_committees[['seniority_bucket', 'passed']].groupby('seniority_bucket').agg(['mean', 'count']).reset_index()
-    bucket_pass_rates.plot(x='seniority_bucket', y=0, kind='bar', legend=False, title='Percent passed by average seniority of cosponsors')
+    axes = bucket_pass_rates.plot(x='seniority_bucket', y=0, kind='bar', legend=False, title='Percent passed by avg seniority')
+    axes.title.set_fontsize(25)
+    axes.set_xticklabels(axes.xaxis.get_majorticklabels(), rotation=0, fontsize=12)
+    yticks = axes.get_yticklabels()
+    [tick.set_fontsize(10) for tick in yticks]
+    axes.set_xlabel('Number of terms', fontsize=20)
+    axes.set_ylabel('Percent passed', fontsize=20)
     graph_filename = "../graphs/seniority_"+current_time+".png"
-    plt.savefig(graph_filename)
+
+    plt.savefig(graph_filename, dpi=300)
 
 def plot_urgency(df):
     pd.crosstab(df.urgency, df.passed, normalize='index').reset_index().plot(x='urgency',
@@ -95,7 +107,7 @@ def plot_days_comparison_hist(df):
     plt.savefig(graph_filename)
 
 def authors_graphs():
-    plot_cosponsor_boxplot(df)
+    #plot_cosponsor_boxplot(df)
     plot_parties(df)
 
 def plot_cosponsor_boxplot(df):
@@ -110,10 +122,16 @@ def plot_cosponsor_boxplot(df):
 def plot_parties(df):
     ax = pd.crosstab(df.party, df.passed, normalize='index').reset_index().plot(x='party',
         y=1, kind='bar', title='Percent passed by party', legend=False)
-    ax.set_xticklabels(ax.xaxis.get_majorticklabels(), rotation=0)
+    ax.set_xticklabels(ax.xaxis.get_majorticklabels(), rotation=0, fontsize=15)
+    labels = ["All Dem", "All Repub", "Both", "Committee"]
+    ax.set_xticklabels(labels)
+    ax.set_xlabel("")
+    ax.title.set_fontsize(25)
+    yticks = ax.get_yticklabels()
+    [tick.set_fontsize(13) for tick in yticks]
     ax.plot()
     graph_filename = "../graphs/party_"+current_time+".png"
-    plt.savefig(graph_filename)
+    plt.savefig(graph_filename, dpi=300)
 
 def bill_version_graphs():
     query = """select b.bill_id, count(bill_version_id) as n_versions, passed from bill_version_tbl bv
@@ -157,4 +175,40 @@ def plot_n_amendments(df):
     graph_filename = "../graphs/n_amendments_"+current_time+".png"
     plt.savefig(graph_filename)
 
-bills_graphs()
+def bill_timeline_graphs():
+    query = """select intro_t.bill_id, (datediff(passed_date, intro_date)) as time_to_pass from
+    	(select only_passed.bill_id,  min(bill_version_action_date) as intro_date from
+    	(SELECT *
+    		FROM bill_tbl b
+    		where measure_type in ('AB' , 'SB') and passed=1) only_passed
+    	left join bill_version_tbl bv on only_passed.bill_id=bv.bill_id
+    	where bill_version_action = 'Introduced'
+    	group by only_passed.bill_id) intro_t
+    join
+    	(select only_passed.bill_id,  min(bill_version_action_date) as passed_date from
+    	(SELECT *
+    		FROM bill_tbl b
+    		where measure_type in ('AB' , 'SB') and passed=1) only_passed
+    	join bill_version_tbl bv on only_passed.bill_id=bv.bill_id
+    	where bill_version_action = 'Chaptered'
+    	group by only_passed.bill_id) passed_t
+    on intro_t.bill_id=passed_t.bill_id"""
+    df = get_sql.get_df(query)
+    plot_bill_timeline(df)
+
+
+def plot_bill_timeline(df):
+    most = df['time_to_pass'].max()
+    bins = np.arange(0, most, step=25)
+    marks = np.arange(0, most, step=50)
+    ax = df.plot(y='time_to_pass', kind='hist', bins=bins, legend=False)
+    ax.xaxis.set_ticks(marks)
+    ax.set_xticklabels(marks, rotation=45, fontsize=12)
+    ax.set_yticklabels(ax.yaxis.get_majorticklabels(), fontsize=12)
+    ax.set_title("Number of days it takes for bill to pass", fontsize=15)
+    ax.plot()
+    plt.savefig('../graphs/passed_bill_timeline.png')
+
+# bills_graphs()
+# authors_graphs()
+bill_timeline_graphs()
