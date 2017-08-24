@@ -8,12 +8,13 @@ from sklearn.decomposition import NMF
 import cPickle as pickle
 from datetime import datetime
 from multiprocessing import Pool, cpu_count
+from functools import partial
 import sql_queries
 
 class DataPrep(object):
     """An object to clean and wrangle data into format for a model"""
 
-    def __init__(self, query=None, filepath=None, training=True, predict=False, amendment_model=False):
+    def __init__(self, query=None, filepath=None, training=True, predict=False, amendment_model=False, all_bills=False):
         """Reads in data, either from csv, a specific SQL query, or takes a series of pre-defined steps to
         get data for the introduction model (by default) or the amendment model.
 
@@ -23,6 +24,7 @@ class DataPrep(object):
             training (bool): whether to use train or test mode.
             predict (bool): whether to prepare unseen data to predict upon
             amendment_model (bool): whether to take the steps to build features for amendment model
+            all_bills (bool): whether to use all bills in loading in data, disregarding train/test split
         """
         if training:
             if query:
@@ -35,18 +37,18 @@ class DataPrep(object):
                 nrows = self.df.shape[0]
                 print "loaded csv, {} rows".format(nrows)
             elif amendment_model:
-                self.df = self.amendment_data()
+                self.df = self.amendment_data2()
                 # uncomment next life if you want to use the bill content the basis for features
                 # self.df['content'] = [content for content in self.process_text('bill_xml', 'Content')]
             else: # default queries
-                self.df = self.intro_data()
+                self.df = self.intro_data(all_bills=all_bills)
         else: #test mode
             if amendment_model:
                 self.df = self.amendment_data(test=True)
             else:
                 self.df = self.intro_data(test=True)
 
-    def intro_data(self, test=False):
+    def intro_data(self, test=False, all_bills=False):
         """This executes all necessary queries and read all necessary files to build the master feature matrix
         for the introduction model. Currently, these features are:
             ['bill_id', 'bill_version_id', 'session_year', 'session_num',
@@ -54,9 +56,10 @@ class DataPrep(object):
        'vote_required', 'taxlevy', 'fiscal_committee', 'passed', 'party',
        'nterms', 'success_rate', 'bill_xml']
        """
-
         if test:
             bills_query = sql_queries.intro_bills_query_test()
+        elif all_bills:
+            bills_query = sql_queries.intro_bills_query_all()
         else:
             bills_query = sql_queries.intro_bills_query()
         bills_df = get_sql.get_df(bills_query)
@@ -68,10 +71,13 @@ class DataPrep(object):
 
         # bill_authors_merged_df = pd.merge(bills_df, authors_df, on='bill_id')
         bill_authors_text_df = pd.merge(bill_authors_merged_df, text_df, on='bill_id')
+        n_amendments_query = sql_queries.final_n_amendments()
+        n_amendments = get_sql.get_df(n_amendments_query)
+        merged_df = pd.merge(bill_authors_text_df, n_amendments, on='bill_id')
 
-        return bill_authors_text_df
+        return  merged_df
 
-    def amendment_data(self, test=True):
+    def amendment_data(self, test=False):
         """This executes all necessary queries and read all necessary files to build the master feature matrix
         for the amendment model. Currently, these features are:
             ['bill_version_id', 'bill_xml', 'bill_id', 'session_year',
@@ -105,6 +111,30 @@ class DataPrep(object):
         prev_com_count = prev_com_count.rename(columns={'SCID': 'n_prev_votes'})
         merged_df = pd.merge(merged_df, prev_com_count, on='bill_version_id', how='left')
         merged_df['n_prev_votes'] = merged_df['n_prev_votes'].fillna(value=0)
+
+        return merged_df
+
+    def amendment_data2(self, test=False):
+        """This executes all necessary queries and read all necessary files to build the master feature matrix
+        for the amendment model. Currently, these features are:
+            ['bill_version_id', 'bill_xml', 'bill_id', 'session_year',
+       'session_num', 'measure_type', 'urgency', 'days_since_start',
+       'appropriation', 'vote_required', 'taxlevy', 'fiscal_committee',
+       'passed', 'n_prev_versions', 'party', 'nterms', 'success_rate',
+       'n_prev_votes']
+       """
+        if test:
+            pass
+        else:
+            bills_query = sql_queries.amd_bills_query_first()
+        bills_df = get_sql.get_df(bills_query)
+
+        merged_df = self.add_authors(bills_df, "amendment")
+
+        text_query = sql_queries.amd_text_query()
+        text_df = get_sql.get_df(text_query)
+        merged_df = pd.merge(text_df, merged_df, on='bill_version_id')
+
 
         return merged_df
 
@@ -271,34 +301,69 @@ class DataPrep(object):
                 print "on document {} of {}".format(i, len(X_data))
             yield bill
 
-    def run_tfidf(self, use_cached_tfidf, cache_tfidf, X_data=None, identifier=None, **tfidfargs):
+    def run_tfidf(self, use_cached_tfidf, cache_tfidf, X_data=None, identifier=None, test=False, **tfidfargs):
         """Apply TFIDF and get back transformed matrix"""
+
         if use_cached_tfidf:
-            with open(use_cached_tfidf) as p:
-                tfidf_contents = pickle.load(p)
-                tfidf_mat = tfidf_contents[1]
-            print "loaded tfidf"
+            if test:
+                with open(use_cached_tfidf) as p:
+                    tfidf_contents = pickle.load(p)
+                    tfidf = tfidf_contents[0]
+                    print "loaded already-fit tfidf"
+                    corpus = self.make_corpus(X_data)
+                    tfidf_mat = tfidf.transform(corpus)
+                    print "made tfidf for test data"
+            else:
+                with open(use_cached_tfidf) as p:
+                    tfidf_contents = pickle.load(p)
+                    tfidf_mat = tfidf_contents[1]
+                print "loaded tfidf matrix of shape {}".format(str(tfidf_mat.shape))
         else: #not using a cached tfidf, will have to generate
             identifiers = self.df[identifier].values
             corpus = self.make_corpus(X_data)
             tfidf = TfidfVectorizer(tokenizer=tokenize, **tfidfargs)
+            if test:
+                print "must use pre-existing tfidf matrix in test mode"
+                exit()
             tfidf_mat = tfidf.fit_transform(corpus)
             if cache_tfidf:
                 current_time = datetime.now().strftime(format='%m-%d-%y-%H-%M')
-                filename = "/home/ubuntu/extra/data/cached_tfidf_"+current_time+".pkl"
+                filename = "/home/ubuntu/ca_bills_project/data/extra/cached_tfidf_real_"+current_time+".pkl"
+                print filename
                 with open(filename, 'w') as p:
                     pickle.dump([tfidf, tfidf_mat, identifiers], p)
                 print "pickled tfidf file at {}".format(filename)
             print "tfidf complete"
         return tfidf_mat
 
-    def get_nmf_mat(self, X_data, n_components):
+    def get_nmf_mat(self, X_data, n_components, use_cached_nmf=None, save=True,  test=False):
         """Returns sklearn's W matrix from NMF with the given number of latent topics"""
-        nmf = NMF(n_components=n_components)
-        W = nmf.fit_transform(X_data)
+        if test:
+            if not use_cached_nmf:
+                print "must use pre-existing nmf for test mode"
+                exit()
+            with open(use_cached_nmf) as p:
+                nmf_contents = pickle.load(p)
+            nmf = nmf_contents[0]
+            print "loaded pre-existing nmf pickle"
+            W = nmf.transform(X_data)
+        else:
+            if use_cached_nmf:
+                with open(use_cached_nmf) as p:
+                    nmf_contents = pickle.load(p)
+                W = nmf_contents[1]
+                print "loaded pre-existing nmf pickle"
+            else:
+                nmf = NMF(n_components=n_components)
+                W = nmf.fit_transform(X_data)
+                if save:
+                    current_time = datetime.now().strftime(format='%m-%d-%y-%H-%M')
+                    filename = "/home/ubuntu/ca_bills_project/data/extra/nmf_"+str(n_components)+"_"+current_time+".pkl"
+                    with open(filename, 'w') as p:
+                        pickle.dump([nmf, W], p)
         return W
 
-    def process_text(self, column_name, field, identifier, use_cached_processing=None, cache_processing=False):
+    def process_text(self, column_name, field, identifier=None, use_cached_processing=None, cache_processing=True):
         """Run each text row of column_name through BS to extract content from the specified XML field"""
         if use_cached_processing:
             with open(use_cached_processing) as p:
@@ -307,18 +372,23 @@ class DataPrep(object):
         else:
             identifiers = self.df[identifier].values
             bill_soup = self.df[column_name].values
-            bill_content = [self.get_bill_text(soup, field) for soup in bill_soup]
-            if cache_processing:
-                current_time = datetime.now().strftime(format='%m-%d-%y-%H-%M')
-                filename = "../data/cached_processed_text_"+current_time+".pkl"
-                with open(filename, 'w') as p:
-                    pickle.dump(zip(identifiers, bill_content), p)
-                print "pickled processed text file at {}".format(filename)
+            pool = Pool(processes=8)
+            results = pool.map(get_bill_text, bill_soup)
+            pool.close()
+            # bill_content = [self.get_bill_text(soup, field) for soup in bill_soup]
+            bill_content = results
+            self.df['content'] = bill_content
+            # if cache_processing:
+            #     current_time = datetime.now().strftime(format='%m-%d-%y-%H-%M')
+            #     filename = "/home/ubuntu/ca_bills_project/data/extra/cached_processed_text_df"+current_time+".pkl"
+            #     with open(filename, 'w') as p:
+            #         pickle.dump(self.df, p)
+            #     print "pickled processed text file at {}".format(filename)
             print "processed text"
         return bill_content
 
 
-    def get_bill_text(self, xml, field):
+    def get_bill_text(self, xml, field='Content'):
         """Finds all tags of field in given xml and returns them as one string
         separated by space if there's more than one"""
         soup = BeautifulSoup(xml, "xml")
@@ -326,26 +396,32 @@ class DataPrep(object):
         text = " ".join(results)
         return text
 
-    def process_and_tfidf(self, use_cached_processing=None, use_cached_tfidf=None, cache_processing=False, cache_tfidf=False, identifier=None, **tfidfargs):
+    def process_and_tfidf(self, use_cached_tfidf=None, cache_tfidf=False, identifier=None, test=False, **tfidfargs):
         """Processes text through BeautifulSoup (if necessary) to extract an XML field and then runs tfidf
         on all bill's text"""
-        if cache_tfidf and not use_cached_processing:  #make sure to cache processing if caching tfidf
-            cache_processing=True
-        if not use_cached_tfidf:
+        if test:
             if 'content' not in self.df.columns:
-                processed = self.process_text('bill_xml', 'Content', use_cached_processing, cache_processing)
+                processed = self.process_text('bill_xml', 'Content', identifier)
                 self.df['content'] = processed
             self.df['content'][self.df['content'].isnull()] = " "
             X = self.df.content.values
-            tfidf_mat = self.run_tfidf(use_cached_tfidf, cache_tfidf, X_data=X, identifier=identifier, **tfidfargs)
-        else: #using cache, don't need to process
-            tfidf_mat = self.run_tfidf(use_cached_tfidf, cache_tfidf)
+            tfidf_mat = self.run_tfidf(use_cached_tfidf, cache_tfidf, X_data=X, identifier=identifier, test=test, **tfidfargs)
+        else:
+            if not use_cached_tfidf:
+                if 'content' not in self.df.columns:
+                    processed = self.process_text('bill_xml', 'Content', identifier)
+                    self.df['content'] = processed
+                self.df['content'][self.df['content'].isnull()] = " "
+                X = self.df.content.values
+                tfidf_mat = self.run_tfidf(use_cached_tfidf, cache_tfidf, X_data=X, identifier=identifier, **tfidfargs)
+            else: #using cache, don't need to process
+                tfidf_mat = self.run_tfidf(use_cached_tfidf, cache_tfidf)
         return tfidf_mat
 
-    def add_latent_topics(self, n_components, use_cached_processing=None, use_cached_tfidf=None, cache_processing=False, cache_tfidf=False, **tfidfargs):
+    def add_latent_topics(self, n_components,  use_cached_tfidf=None, cache_tfidf=False, use_cached_nmf=None, test=False, **tfidfargs):
         """Adds latent topics to feature matrix"""
-        tfidf_mat = self.process_and_tfidf(use_cached_processing, use_cached_tfidf, cache_processing, cache_tfidf, **tfidfargs)
-        ltm = self.get_nmf_mat(tfidf_mat, n_components)
+        tfidf_mat = self.process_and_tfidf(use_cached_tfidf, cache_tfidf, identifier='bill_id',  test=test, **tfidfargs)
+        ltm = self.get_nmf_mat(tfidf_mat, n_components, use_cached_nmf=use_cached_nmf, test=test)
         col_names = ["topic_"+str(i) for i in range(n_components)]
         ltm_df = pd.DataFrame(ltm, columns=col_names)
         self.df = pd.concat([self.df, ltm_df], axis=1)
@@ -356,9 +432,17 @@ class DataPrep(object):
         keepers = np.random.choice(range(self.df.shape[0]), size=nrows_to_keep, replace=False)
         self.df = self.df.iloc[keepers,:]
 
-    def prepare(self, save=False, regression=False, n_components=2, use_cached_tfidf=None, cache_tfidf=False, **tfidfargs):
+    def prepare(self, save=False, regression=False, n_components=None, use_cached_tfidf=None, cache_tfidf=False, use_cached_nmf=None, test=False, **tfidfargs):
         """Executes all cleaning methods in proper order. If regression, remove one
         dummy column and scale numeric columns for regularization"""
+        # add latent topics
+        if n_components:
+            self.add_latent_topics(n_components,  use_cached_tfidf, cache_tfidf, use_cached_nmf, test, **tfidfargs)
+        if save:
+            current_time = datetime.now().strftime(format='%m-%d-%y-%H-%M')
+            filename = "/home/ubuntu/ca_bills_project/data/extra/topic_intro_data_" + current_time + ".csv"
+            self.df.to_csv(filename, index=False, encoding='utf-8')
+            print "saved df to {}".format(filename)
         self.drop_na()
         self.make_session_type()
         # self.df = self.df[['party', 'passed', 'bill_xml']]
@@ -369,16 +453,11 @@ class DataPrep(object):
             self.dummify(['party', 'urgency', 'appropriation', 'taxlevy', 'fiscal_committee'])
         self.bucket_vote_required()
 
-        # add latent topics
-        # if use_text:
-        #     self.add_latent_topics(n_components,  use_cached_processing, use_cached_tfidf, cache_processing, cache_tfidf, **tfidfargs)
 
 
 
-        if save:
-            current_time = datetime.now().strftime(format='%m-%d-%y-%H-%M')
-            filename = "/home/ubuntu/extra/data/intro_data_" + current_time + ".csv"
-            self.df.to_csv(filename, index=False, encoding='utf-8')
+
+
 
         # todrop = [u'bill_id', u'session_year', u'session_num', u'measure_type', u'fiscal_committee', u'bill_version_id', u'bill_xml']
 
@@ -392,18 +471,46 @@ class DataPrep(object):
 
         # return X, y
 
-    def subset(self, features, return_df=False):
+    def prepare_predict_party(self, save=False, regression=False, n_components=None, use_cached_tfidf=None, cache_tfidf=False, **tfidfargs):
+        # add latent topics
+        if n_components:
+            self.add_latent_topics(n_components,  use_cached_tfidf, cache_tfidf, **tfidfargs)
+        self.drop_na()
+        self.make_session_type()
+        self.only_one_party()
+        # if regression:
+        #     self.dummify(['party', 'urgency', 'appropriation', 'taxlevy', 'fiscal_committee'], regression=True)
+        # else:
+        #     self.dummify(['party', 'urgency', 'appropriation', 'taxlevy', 'fiscal_committee'])
+        # self.bucket_vote_required()
+
+
+        if save:
+            current_time = datetime.now().strftime(format='%m-%d-%y-%H-%M')
+            filename = "/home/ubuntu/extra/data/intro_data_" + current_time + ".csv"
+            self.df.to_csv(filename, index=False, encoding='utf-8')
+
+        if 'bill_xml' in self.df.columns:
+            todrop = [u'bill_xml']
+            self.drop_some_cols(todrop)
+
+    def subset(self, features, dep_var='passed', return_df=False):
         """Allows the user to specify which features from the feature matrix will be used.
         Features must already be processed (ie in numeric format)"""
-        if 'passed' not in features:
-            features.append('passed')
+        if dep_var not in features:
+            features.append(dep_var)
         self.df = self.df[features]
         print "Using these features: {}".format(", ".join(self.df.columns))
         if return_df:
             return self.df
-        y = self.df.pop('passed').values
+        y = self.df.pop(dep_var).values
         X = self.df.values
         return X, y
+
+    def only_one_party(self):
+        """Only keep rows of bills that are introduced by member(s) of only one party"""
+        self.df = self.df[(self.df['party']=='ALL_DEM') | (self.df['party']=='ALL_REP')]
+        self.df['party'] = self.df['party'].apply(lambda p: 0 if p=='ALL_DEM' else 1)
 
     def bucket_n_amendments(self, cutoff):
         self.df.n_prev_versions = self.df.n_prev_versions.apply(lambda n: 0 if n < cutoff else 1)
@@ -489,3 +596,11 @@ def tokenize(text):
     bill_words = bill_content.words
     bill_words_stemmed = [word.stem() for word in bill_words if word.isalpha()]
     return bill_words_stemmed
+
+def get_bill_text(xml, field='Content'):
+    """Finds all tags of field in given xml and returns them as one string
+    separated by space if there's more than one"""
+    soup = BeautifulSoup(xml, "xml")
+    results = [raw.text for raw in soup.find_all(field)]
+    text = " ".join(results)
+    return text
