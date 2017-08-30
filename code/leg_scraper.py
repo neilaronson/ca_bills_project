@@ -69,6 +69,31 @@ def make_standard_table(list_of_tuples):
 
     return final_results
 
+def join_houses(assembly_df, senate_df):
+    senate_df = senate_df.iloc[21:]  # get rid of old entries where Senate sessions are labeled differently
+    both_houses = []
+
+    for i, df in enumerate((assembly_df, senate_df)):
+        house_df = df.reset_index()
+        house_df = house_df.rename(columns={0: 'session_year'})
+        # now make df with session_year, district and name as columns
+        house_df_melted = pd.melt(house_df, id_vars='session_year', var_name='district', value_name='name')
+        house_joined = pd.merge(house_df_melted, house_df_melted, on='name')
+        house_joined_conditioned = house_joined[house_joined.session_year_x >= house_joined.session_year_y]
+        house_seniority = house_joined_conditioned.groupby(['session_year_x', 'district_x', 'name']).count()['session_year_y'].reset_index()
+        house_seniority = house_seniority.rename(columns={'session_year_x': 'session_year', 'district_x': 'district', 'session_year_y':'nterms'})
+        # now we have session_year, district, name of legislator and the number of previous terms they have served in that house
+        if i == 0:
+            house_seniority['district'] = 'AD' + house_seniority['district'].astype(str)  # add in appropriate prefix to match with SQL data
+        else:
+            house_seniority['district'] = 'SD' + house_seniority['district'].astype(str)
+        house_seniority['district'] = house_seniority['district'].apply(lambda x: x[:2]+str(0)+x[2] if len(x)==3 else x)
+        house_seniority['session_year'] = house_seniority['session_year'].str.replace('-', '')
+        both_houses.append(house_seniority)
+
+    all_seniority = pd.concat((both_houses[0], both_houses[1]))
+    return all_seniority
+
 def main():
     page = requests.get("https://en.wikipedia.org/wiki/Members_of_the_California_State_Legislature").content
     soup = BeautifulSoup(page, "html.parser")
@@ -76,8 +101,9 @@ def main():
     assembly_table = soup.find_all('table')[2]
     assembly_df = pandafy_table(assembly_table)
     senate_df = pandafy_table(senate_table)
-    assembly_df.to_csv('../data/assembly.csv', encoding='utf-8')
-    senate_df.to_csv('../data/senate.csv', encoding='utf-8')
+    all_seniority = join_houses(assembly_df, senate_df)
+    all_seniority.to_csv('../data/seniority.csv', encoding='utf-8')
+
 
 if __name__ == '__main__':
     main()
