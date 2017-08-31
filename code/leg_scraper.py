@@ -4,7 +4,6 @@ Convert tables into pandas data frames and then add them to mySQL DB"""
 import requests
 from bs4 import BeautifulSoup
 import pandas as pd
-import get_sql
 
 def pandafy_table(table):
     """Takes in an HTML table as BeautifulSoup object and outputs a pandas df version of the table"""
@@ -92,7 +91,27 @@ def join_houses(assembly_df, senate_df):
         both_houses.append(house_seniority)
 
     all_seniority = pd.concat((both_houses[0], both_houses[1]))
-    return all_seniority
+    return all_seniority, both_houses
+
+def adjust_for_house_switchers(all_seniority, both_houses):
+    assembly = both_houses[0]
+    senate = both_houses[1]
+
+    aswd = all_seniority[['session_year', 'name', 'nterms']]
+    wo_district = pd.merge(aswd, aswd, on='name')
+    wo_district = wo_district[wo_district.session_year_x >= wo_district.session_year_y]
+    total_seniority = wo_district.groupby(['session_year_x', 'name']).count()['session_year_y'].reset_index()
+    total_seniority = total_seniority.rename(columns={'session_year_x': 'session_year', 'session_year_y': 'nterms'})
+
+    total_with_assembly = pd.merge(total_seniority, assembly, on=['name', 'session_year'], how='left')
+    total_with_assembly = total_with_assembly.rename(columns={'nterms_x': 'nterms', 'nterms_y': 'assembly_terms'}).drop('district', axis=1)
+    total_with_assembly_senate = pd.merge(total_with_assembly, senate, on=['name', 'session_year'], how='left')
+    total_with_assembly_senate = total_with_assembly_senate.rename(columns={'nterms_x': 'nterms', 'nterms_y': 'senate_terms'}).drop('district', axis=1)
+    temp = total_with_assembly_senate['assembly_terms'].combine_first(total_with_assembly_senate['senate_terms'])
+    total_with_assembly_senate['assembly_terms'] = total_with_assembly_senate['assembly_terms'].fillna(total_with_assembly_senate['nterms'] - temp)
+    total_with_assembly_senate['senate_terms'] = total_with_assembly_senate['senate_terms'].fillna(total_with_assembly_senate['nterms'] - temp)
+    total_with_assembly_senate['nterms'] = total_with_assembly_senate['nterms'].combine(total_with_assembly_senate['assembly_terms'] + total_with_assembly_senate['senate_terms'], min)
+    return total_with_assembly_senate
 
 def main():
     page = requests.get("https://en.wikipedia.org/wiki/Members_of_the_California_State_Legislature").content
@@ -101,8 +120,9 @@ def main():
     assembly_table = soup.find_all('table')[2]
     assembly_df = pandafy_table(assembly_table)
     senate_df = pandafy_table(senate_table)
-    all_seniority = join_houses(assembly_df, senate_df)
-    all_seniority.to_csv('../data/seniority.csv', encoding='utf-8')
+    all_seniority, both_houses = join_houses(assembly_df, senate_df)
+    final_seniority = adjust_for_house_switchers(all_seniority, both_houses)
+    final_seniority.to_csv('../data/seniority.csv', encoding='utf-8', index=False)
 
 
 if __name__ == '__main__':
